@@ -324,8 +324,15 @@ void ExportManager::OnPresent(IDXGISwapChain* swapchain) {
     m_frameId++;
 
     // 1. Get swapchain backbuffer (Color Source)
+    UINT backbufferIdx = 0;
+    IDXGISwapChain3* sc3 = nullptr;
+    if (SUCCEEDED(swapchain->QueryInterface(IID_PPV_ARGS(&sc3)))) {
+        backbufferIdx = sc3->GetCurrentBackBufferIndex();
+        sc3->Release();
+    }
+
     ID3D12Resource* backbuffer = nullptr;
-    if (FAILED(swapchain->GetBuffer(0, IID_PPV_ARGS(&backbuffer)))) {
+    if (FAILED(swapchain->GetBuffer(backbufferIdx, IID_PPV_ARGS(&backbuffer)))) {
         return;
     }
 

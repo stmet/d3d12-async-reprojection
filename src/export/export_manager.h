@@ -13,6 +13,12 @@ struct ExportSlot {
     ID3D12Fence* fence = nullptr;
     uint64_t currentFenceValue = 0;
     HANDLE fenceEvent = nullptr;
+
+    // Keep handles open to prevent Windows from garbage collecting the namespace names
+    HANDLE colorSharedHandle = nullptr;
+    HANDLE depthSharedHandle = nullptr;
+    HANDLE mvSharedHandle = nullptr;
+    HANDLE fenceSharedHandle = nullptr;
 };
 
 class ExportManager {

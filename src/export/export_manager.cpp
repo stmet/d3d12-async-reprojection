@@ -138,6 +138,12 @@ void ExportManager::ReleaseTextures() {
         if (m_slots[i].mvTex) { m_slots[i].mvTex->Release(); m_slots[i].mvTex = nullptr; }
         if (m_slots[i].fence) { m_slots[i].fence->Release(); m_slots[i].fence = nullptr; }
         if (m_slots[i].fenceEvent) { CloseHandle(m_slots[i].fenceEvent); m_slots[i].fenceEvent = nullptr; }
+
+        if (m_slots[i].colorSharedHandle) { CloseHandle(m_slots[i].colorSharedHandle); m_slots[i].colorSharedHandle = nullptr; }
+        if (m_slots[i].depthSharedHandle) { CloseHandle(m_slots[i].depthSharedHandle); m_slots[i].depthSharedHandle = nullptr; }
+        if (m_slots[i].mvSharedHandle) { CloseHandle(m_slots[i].mvSharedHandle); m_slots[i].mvSharedHandle = nullptr; }
+        if (m_slots[i].fenceSharedHandle) { CloseHandle(m_slots[i].fenceSharedHandle); m_slots[i].fenceSharedHandle = nullptr; }
+
         m_slots[i].currentFenceValue = 0;
     }
     m_texturesInitialized = false;
@@ -224,9 +230,11 @@ bool ExportManager::RecreateExportTextures(uint32_t width, uint32_t height, DXGI
 
         wchar_t name[128];
         swprintf_s(name, L"Local\\AsyncReproj_Color_%d", i);
-        HANDLE hShared = nullptr;
-        m_device->CreateSharedHandle(m_slots[i].colorTex, nullptr, GENERIC_ALL, name, &hShared);
-        if (hShared) CloseHandle(hShared);
+        hr = m_device->CreateSharedHandle(m_slots[i].colorTex, nullptr, GENERIC_ALL, name, &m_slots[i].colorSharedHandle);
+        if (FAILED(hr)) {
+            LOG_ERROR("Failed to create shared handle for color texture %d! hr = 0x%X", i, hr);
+            return false;
+        }
 
         // Create Shared Depth (expose as typeless family format)
         DXGI_FORMAT exportDepthFmt = DXGI_FORMAT_R32_TYPELESS;
@@ -253,8 +261,11 @@ bool ExportManager::RecreateExportTextures(uint32_t width, uint32_t height, DXGI
         }
 
         swprintf_s(name, L"Local\\AsyncReproj_Depth_%d", i);
-        m_device->CreateSharedHandle(m_slots[i].depthTex, nullptr, GENERIC_ALL, name, &hShared);
-        if (hShared) CloseHandle(hShared);
+        hr = m_device->CreateSharedHandle(m_slots[i].depthTex, nullptr, GENERIC_ALL, name, &m_slots[i].depthSharedHandle);
+        if (FAILED(hr)) {
+            LOG_ERROR("Failed to create shared handle for depth texture %d! hr = 0x%X", i, hr);
+            return false;
+        }
 
         // Create Shared MV
         desc.Format = (mvFmt != DXGI_FORMAT_UNKNOWN) ? mvFmt : DXGI_FORMAT_R16G16_FLOAT;
@@ -272,8 +283,11 @@ bool ExportManager::RecreateExportTextures(uint32_t width, uint32_t height, DXGI
         }
 
         swprintf_s(name, L"Local\\AsyncReproj_MV_%d", i);
-        m_device->CreateSharedHandle(m_slots[i].mvTex, nullptr, GENERIC_ALL, name, &hShared);
-        if (hShared) CloseHandle(hShared);
+        hr = m_device->CreateSharedHandle(m_slots[i].mvTex, nullptr, GENERIC_ALL, name, &m_slots[i].mvSharedHandle);
+        if (FAILED(hr)) {
+            LOG_ERROR("Failed to create shared handle for MV texture %d! hr = 0x%X", i, hr);
+            return false;
+        }
 
         // Create Shared Fence
         hr = m_device->CreateFence(0, D3D12_FENCE_FLAG_SHARED, IID_PPV_ARGS(&m_slots[i].fence));
@@ -283,8 +297,11 @@ bool ExportManager::RecreateExportTextures(uint32_t width, uint32_t height, DXGI
         }
 
         swprintf_s(name, L"Local\\AsyncReproj_Fence_%d", i);
-        m_device->CreateSharedHandle(m_slots[i].fence, nullptr, GENERIC_ALL, name, &hShared);
-        if (hShared) CloseHandle(hShared);
+        hr = m_device->CreateSharedHandle(m_slots[i].fence, nullptr, GENERIC_ALL, name, &m_slots[i].fenceSharedHandle);
+        if (FAILED(hr)) {
+            LOG_ERROR("Failed to create shared handle for fence %d! hr = 0x%X", i, hr);
+            return false;
+        }
 
         m_slots[i].fenceEvent = CreateEventEx(nullptr, nullptr, 0, EVENT_ALL_ACCESS);
         m_slots[i].currentFenceValue = 0;

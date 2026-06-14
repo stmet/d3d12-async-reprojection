@@ -87,5 +87,4 @@ void Logger::Log(LogLevel level, const char* format, ...) {
 
     DWORD bytesWritten;
     WriteFile(m_fileHandle, buffer, len, &bytesWritten, NULL);
-    FlushFileBuffers(m_fileHandle);
 }

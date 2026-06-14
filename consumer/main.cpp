@@ -136,17 +136,32 @@ void TryInitializeSharedResources() {
                 HANDLE hShared = nullptr;
                 wchar_t name[128];
                 swprintf_s(name, L"Local\\AsyncReproj_Color_%d", i);
-                if (SUCCEEDED(g_device->OpenSharedHandleByName(name, GENERIC_ALL, &hShared))) {
-                    g_device->OpenSharedHandle(hShared, IID_PPV_ARGS(&g_slots[i].colorTex));
+                HRESULT hr = g_device->OpenSharedHandleByName(name, GENERIC_ALL, &hShared);
+                if (SUCCEEDED(hr)) {
+                    hr = g_device->OpenSharedHandle(hShared, IID_PPV_ARGS(&g_slots[i].colorTex));
+                    if (FAILED(hr)) {
+                        printf("Failed to open shared texture Color_%d: hr = 0x%08X\n", i, hr);
+                    }
                     CloseHandle(hShared);
+                } else {
+                    static DWORD lastPrint = 0;
+                    DWORD now = GetTickCount();
+                    if (now - lastPrint > 5000) {
+                        printf("Failed to open shared handle by name %ls: hr = 0x%08X\n", name, hr);
+                        lastPrint = now;
+                    }
                 }
             }
             if (!g_slots[i].depthTex) {
                 HANDLE hShared = nullptr;
                 wchar_t name[128];
                 swprintf_s(name, L"Local\\AsyncReproj_Depth_%d", i);
-                if (SUCCEEDED(g_device->OpenSharedHandleByName(name, GENERIC_ALL, &hShared))) {
-                    g_device->OpenSharedHandle(hShared, IID_PPV_ARGS(&g_slots[i].depthTex));
+                HRESULT hr = g_device->OpenSharedHandleByName(name, GENERIC_ALL, &hShared);
+                if (SUCCEEDED(hr)) {
+                    hr = g_device->OpenSharedHandle(hShared, IID_PPV_ARGS(&g_slots[i].depthTex));
+                    if (FAILED(hr)) {
+                        printf("Failed to open shared texture Depth_%d: hr = 0x%08X\n", i, hr);
+                    }
                     CloseHandle(hShared);
                 }
             }
@@ -154,8 +169,12 @@ void TryInitializeSharedResources() {
                 HANDLE hShared = nullptr;
                 wchar_t name[128];
                 swprintf_s(name, L"Local\\AsyncReproj_MV_%d", i);
-                if (SUCCEEDED(g_device->OpenSharedHandleByName(name, GENERIC_ALL, &hShared))) {
-                    g_device->OpenSharedHandle(hShared, IID_PPV_ARGS(&g_slots[i].mvTex));
+                HRESULT hr = g_device->OpenSharedHandleByName(name, GENERIC_ALL, &hShared);
+                if (SUCCEEDED(hr)) {
+                    hr = g_device->OpenSharedHandle(hShared, IID_PPV_ARGS(&g_slots[i].mvTex));
+                    if (FAILED(hr)) {
+                        printf("Failed to open shared texture MV_%d: hr = 0x%08X\n", i, hr);
+                    }
                     CloseHandle(hShared);
                 }
             }
@@ -163,8 +182,12 @@ void TryInitializeSharedResources() {
                 HANDLE hShared = nullptr;
                 wchar_t name[128];
                 swprintf_s(name, L"Local\\AsyncReproj_Fence_%d", i);
-                if (SUCCEEDED(g_device->OpenSharedHandleByName(name, GENERIC_ALL, &hShared))) {
-                    g_device->OpenSharedHandle(hShared, IID_PPV_ARGS(&g_slots[i].fence));
+                HRESULT hr = g_device->OpenSharedHandleByName(name, GENERIC_ALL, &hShared);
+                if (SUCCEEDED(hr)) {
+                    hr = g_device->OpenSharedHandle(hShared, IID_PPV_ARGS(&g_slots[i].fence));
+                    if (FAILED(hr)) {
+                        printf("Failed to open shared fence Fence_%d: hr = 0x%08X\n", i, hr);
+                    }
                     CloseHandle(hShared);
                 }
             }
@@ -185,8 +208,46 @@ void WaitForPreviousFrame() {
 }
 
 bool InitializeD3D() {
-    // 1. Create Device
-    HRESULT hr = D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&g_device));
+    IDXGIAdapter1* targetAdapter = nullptr;
+    
+    // Try to get high-performance GPU using IDXGIFactory6
+    IDXGIFactory6* factory6 = nullptr;
+    if (SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory6)))) {
+        IDXGIAdapter1* adapter = nullptr;
+        for (UINT i = 0; SUCCEEDED(factory6->EnumAdapterByGpuPreference(i, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE, IID_PPV_ARGS(&adapter))); ++i) {
+            DXGI_ADAPTER_DESC1 desc;
+            adapter->GetDesc1(&desc);
+            if (!(desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)) {
+                targetAdapter = adapter;
+                printf("Selected GPU (High Performance): %ls\n", desc.Description);
+                break;
+            }
+            adapter->Release();
+        }
+        factory6->Release();
+    }
+    
+    // Fallback if IDXGIFactory6 is not available or failed
+    if (!targetAdapter) {
+        IDXGIFactory4* factory = nullptr;
+        if (SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) {
+            IDXGIAdapter1* adapter = nullptr;
+            for (UINT i = 0; SUCCEEDED(factory->EnumAdapters1(i, &adapter)); ++i) {
+                DXGI_ADAPTER_DESC1 desc;
+                adapter->GetDesc1(&desc);
+                if (!(desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)) {
+                    targetAdapter = adapter;
+                    printf("Selected GPU (Fallback): %ls\n", desc.Description);
+                    break;
+                }
+                adapter->Release();
+            }
+            factory->Release();
+        }
+    }
+
+    HRESULT hr = D3D12CreateDevice(targetAdapter, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&g_device));
+    if (targetAdapter) targetAdapter->Release();
     if (FAILED(hr)) return false;
 
     // 2. Create Command Queue

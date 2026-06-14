@@ -249,23 +249,9 @@ void ResourceTracker::DumpDebugScores() {
     LOG_INFO("=== Resource Tracker Candidate Scoring Dump (Frame %llu) ===", m_lastDumpFrame);
     LOG_INFO("Total tracked resources: %zu", m_resources.size());
     
-    for (const auto& pair : m_resources) {
-        const auto& res = pair.second;
-        LOG_INFO("Resource [0x%p]: Dim=%ux%u, Format=%u, Flags=0x%X",
-            res.resource,
-            (uint32_t)res.desc.Width,
-            res.desc.Height,
-            (uint32_t)res.desc.Format,
-            (uint32_t)res.desc.Flags
-        );
-        LOG_INFO("  -> Color Score: %.1f | Depth Score: %.1f | MV Score: %.1f",
-            res.colorScore, res.depthScore, res.mvScore
-        );
-    }
-    
     LOG_INFO("Best Candidates selected:");
-    LOG_INFO("  -> Color: 0x%p", m_bestColor);
-    LOG_INFO("  -> Depth: 0x%p", m_bestDepth);
-    LOG_INFO("  -> Motion Vector: 0x%p", m_bestMV);
+    LOG_INFO("  -> Color: 0x%p (Score = %.1f)", m_bestColor, m_bestColor ? m_resources[m_bestColor].colorScore : 0.0f);
+    LOG_INFO("  -> Depth: 0x%p (Score = %.1f)", m_bestDepth, m_bestDepth ? m_resources[m_bestDepth].depthScore : 0.0f);
+    LOG_INFO("  -> Motion Vector: 0x%p (Score = %.1f)", m_bestMV, m_bestMV ? m_resources[m_bestMV].mvScore : 0.0f);
     LOG_INFO("=========================================================");
 }

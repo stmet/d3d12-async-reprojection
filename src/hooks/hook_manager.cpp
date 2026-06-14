@@ -128,10 +128,7 @@ bool HookManager::InitializeVTables() {
         o_CreateDepthStencilView = (PFN_CreateDepthStencilView)devVTable[21];
     }
 
-    if (queue) {
-        void** queueVTable = *(void***)queue;
-        o_ExecuteCommandLists = (PFN_ExecuteCommandLists)queueVTable[10];
-    }
+
 
     if (cmdList) {
         void** listVTable = *(void***)cmdList;
@@ -167,7 +164,7 @@ bool HookManager::InstallHooks() {
     if (o_Present1) DetourAttach(&(PVOID&)o_Present1, hkPresent1);
     if (o_CreateCommittedResource) DetourAttach(&(PVOID&)o_CreateCommittedResource, hkCreateCommittedResource);
     if (o_CreatePlacedResource) DetourAttach(&(PVOID&)o_CreatePlacedResource, hkCreatePlacedResource);
-    if (o_ExecuteCommandLists) DetourAttach(&(PVOID&)o_ExecuteCommandLists, hkExecuteCommandLists);
+
     if (o_ResourceBarrier) DetourAttach(&(PVOID&)o_ResourceBarrier, hkResourceBarrier);
     if (o_OMSetRenderTargets) DetourAttach(&(PVOID&)o_OMSetRenderTargets, hkOMSetRenderTargets);
     if (o_CreateShaderResourceView) DetourAttach(&(PVOID&)o_CreateShaderResourceView, hkCreateShaderResourceView);
@@ -197,7 +194,7 @@ void HookManager::UninstallHooks() {
     if (o_Present1) DetourDetach(&(PVOID&)o_Present1, hkPresent1);
     if (o_CreateCommittedResource) DetourDetach(&(PVOID&)o_CreateCommittedResource, hkCreateCommittedResource);
     if (o_CreatePlacedResource) DetourDetach(&(PVOID&)o_CreatePlacedResource, hkCreatePlacedResource);
-    if (o_ExecuteCommandLists) DetourDetach(&(PVOID&)o_ExecuteCommandLists, hkExecuteCommandLists);
+
     if (o_ResourceBarrier) DetourDetach(&(PVOID&)o_ResourceBarrier, hkResourceBarrier);
     if (o_OMSetRenderTargets) DetourDetach(&(PVOID&)o_OMSetRenderTargets, hkOMSetRenderTargets);
     if (o_CreateShaderResourceView) DetourDetach(&(PVOID&)o_CreateShaderResourceView, hkCreateShaderResourceView);
@@ -279,12 +276,7 @@ HRESULT WINAPI HookManager::hkCreatePlacedResource(ID3D12Device* This, ID3D12Hea
     return hr;
 }
 
-void WINAPI HookManager::hkExecuteCommandLists(ID3D12CommandQueue* This, UINT NumCommandLists, ID3D12CommandList* const* ppCommandLists) {
-    if (This->GetDesc().Type == D3D12_COMMAND_LIST_TYPE_DIRECT) {
-        ExportManager::Instance().SetActiveCommandQueue(This);
-    }
-    HookManager::Instance().o_ExecuteCommandLists(This, NumCommandLists, ppCommandLists);
-}
+
 
 void WINAPI HookManager::hkResourceBarrier(ID3D12GraphicsCommandList* This, UINT NumBarriers, const D3D12_RESOURCE_BARRIER* pBarriers) {
     for (UINT i = 0; i < NumBarriers; i++) {

@@ -1,0 +1,30 @@
+# Build outputs
+build/
+bin/
+out/
+Release/
+Debug/
+x64/
+
+# MSVC and IDE files
+.vs/
+*.user
+*.suo
+*.sln.docstates
+
+# Compilation files
+*.obj
+*.pdb
+*.ilk
+*.exe
+*.dll
+*.lib
+*.exp
+
+# Except our copied Detours library
+!external/detours/detours.lib
+
+# Logs and temp files
+*.log
+dxgi.log
+*.tmp

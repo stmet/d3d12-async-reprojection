@@ -12,6 +12,7 @@ struct ExportSlot {
     ID3D12Resource* mvTex = nullptr;
     ID3D12Fence* fence = nullptr;
     uint64_t currentFenceValue = 0;
+    HANDLE fenceEvent = nullptr;
 };
 
 class ExportManager {

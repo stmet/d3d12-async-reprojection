@@ -1,5 +1,43 @@
 #include "resource_tracker.h"
 #include "../common/logger.h"
+#include <unknwn.h>
+
+// Unique GUID for our destruction tracker
+// {4D2A9250-9E1A-4C2E-8E0E-F6DF7D8B9B1E}
+static const GUID DESTRUCTION_TRACKER_GUID = 
+{ 0x4d2a9250, 0x9e1a, 0x4c2e, { 0x8e, 0xe, 0xf6, 0xdf, 0x7d, 0x8b, 0x9b, 0x1e } };
+
+class ResourceDestructionTracker : public IUnknown {
+public:
+    ResourceDestructionTracker(ID3D12Resource* res) : m_refCount(1), m_resource(res) {}
+    
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppvObject) override {
+        if (riid == IID_IUnknown) {
+            *ppvObject = this;
+            AddRef();
+            return S_OK;
+        }
+        return E_NOINTERFACE;
+    }
+    
+    ULONG STDMETHODCALLTYPE AddRef() override {
+        return InterlockedIncrement(&m_refCount);
+    }
+    
+    ULONG STDMETHODCALLTYPE Release() override {
+        ULONG count = InterlockedDecrement(&m_refCount);
+        if (count == 0) {
+            ResourceTracker::Instance().UnregisterResource(m_resource);
+            delete this;
+            return 0;
+        }
+        return count;
+    }
+
+private:
+    ULONG m_refCount;
+    ID3D12Resource* m_resource;
+};
 
 ResourceTracker& ResourceTracker::Instance() {
     static ResourceTracker instance;
@@ -8,21 +46,35 @@ ResourceTracker& ResourceTracker::Instance() {
 
 void ResourceTracker::RegisterResource(ID3D12Resource* resource, const D3D12_RESOURCE_DESC* desc) {
     if (!resource || !desc) return;
-    std::lock_guard<std::mutex> lock(m_mutex);
     
-    if (desc->Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D) return;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (desc->Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D) return;
 
-    TrackedResource tracked = {};
-    tracked.resource = resource;
-    tracked.desc = *desc;
-    
-    m_resources[resource] = tracked;
+        // Skip if already tracked
+        if (m_resources.find(resource) != m_resources.end()) return;
+
+        TrackedResource tracked = {};
+        tracked.resource = resource;
+        tracked.desc = *desc;
+        
+        m_resources[resource] = tracked;
+    }
+
+    // Register destruction callback outside of lock to prevent deadlock
+    ResourceDestructionTracker* tracker = new ResourceDestructionTracker(resource);
+    HRESULT hr = resource->SetPrivateDataInterface(DESTRUCTION_TRACKER_GUID, tracker);
+    tracker->Release();
 }
 
 void ResourceTracker::UnregisterResource(ID3D12Resource* resource) {
     if (!resource) return;
     std::lock_guard<std::mutex> lock(m_mutex);
     m_resources.erase(resource);
+
+    if (m_bestColor == resource) m_bestColor = nullptr;
+    if (m_bestDepth == resource) m_bestDepth = nullptr;
+    if (m_bestMV == resource) m_bestMV = nullptr;
 
     for (auto it = m_descriptors.begin(); it != m_descriptors.end(); ) {
         if (it->second == resource) {

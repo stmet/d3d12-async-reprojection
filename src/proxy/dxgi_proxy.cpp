@@ -45,6 +45,7 @@ bool DXGIFunctions::Load() {
 
 #define DEFINE_FORWARD(name) \
     extern "C" void WINAPI name() { \
+        if (!g_RealDXGI.realDll) g_RealDXGI.Load(); \
         typedef void (WINAPI *PFN)(); \
         ((PFN)g_RealDXGI.name)(); \
     }

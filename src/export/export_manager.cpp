@@ -112,14 +112,71 @@ void ExportManager::InitializeSwapChain(IDXGISwapChain* swapchain) {
 }
 
 void ExportManager::ReleaseTextures() {
+    // Wait for GPU to finish on all slots before destroying resources
+    for (int i = 0; i < 3; i++) {
+        auto& slot = m_slots[i];
+        if (slot.fence && slot.currentFenceValue > 0) {
+            if (slot.fence->GetCompletedValue() < slot.currentFenceValue) {
+                if (slot.fenceEvent) {
+                    slot.fence->SetEventOnCompletion(slot.currentFenceValue, slot.fenceEvent);
+                    WaitForSingleObject(slot.fenceEvent, INFINITE);
+                } else {
+                    HANDLE hEvent = CreateEventEx(nullptr, nullptr, 0, EVENT_ALL_ACCESS);
+                    if (hEvent) {
+                        slot.fence->SetEventOnCompletion(slot.currentFenceValue, hEvent);
+                        WaitForSingleObject(hEvent, INFINITE);
+                        CloseHandle(hEvent);
+                    }
+                }
+            }
+        }
+    }
+
     for (int i = 0; i < 3; i++) {
         if (m_slots[i].colorTex) { m_slots[i].colorTex->Release(); m_slots[i].colorTex = nullptr; }
         if (m_slots[i].depthTex) { m_slots[i].depthTex->Release(); m_slots[i].depthTex = nullptr; }
         if (m_slots[i].mvTex) { m_slots[i].mvTex->Release(); m_slots[i].mvTex = nullptr; }
         if (m_slots[i].fence) { m_slots[i].fence->Release(); m_slots[i].fence = nullptr; }
+        if (m_slots[i].fenceEvent) { CloseHandle(m_slots[i].fenceEvent); m_slots[i].fenceEvent = nullptr; }
         m_slots[i].currentFenceValue = 0;
     }
     m_texturesInitialized = false;
+}
+
+bool AreFormatsCompatible(DXGI_FORMAT src, DXGI_FORMAT dst) {
+    if (src == dst) return true;
+
+    // 32-bit float family
+    if ((src == DXGI_FORMAT_D32_FLOAT || src == DXGI_FORMAT_R32_FLOAT || src == DXGI_FORMAT_R32_TYPELESS) &&
+        (dst == DXGI_FORMAT_D32_FLOAT || dst == DXGI_FORMAT_R32_FLOAT || dst == DXGI_FORMAT_R32_TYPELESS)) {
+        return true;
+    }
+
+    // 16-bit family
+    if ((src == DXGI_FORMAT_D16_UNORM || src == DXGI_FORMAT_R16_UNORM || src == DXGI_FORMAT_R16_TYPELESS || src == DXGI_FORMAT_R16_FLOAT) &&
+        (dst == DXGI_FORMAT_D16_UNORM || dst == DXGI_FORMAT_R16_UNORM || dst == DXGI_FORMAT_R16_TYPELESS || dst == DXGI_FORMAT_R16_FLOAT)) {
+        return true;
+    }
+
+    // 24-bit/8-bit family
+    if ((src == DXGI_FORMAT_D24_UNORM_S8_UINT || src == DXGI_FORMAT_R24G8_TYPELESS || src == DXGI_FORMAT_R24_UNORM_X8_TYPELESS) &&
+        (dst == DXGI_FORMAT_D24_UNORM_S8_UINT || dst == DXGI_FORMAT_R24G8_TYPELESS || dst == DXGI_FORMAT_R24_UNORM_X8_TYPELESS)) {
+        return true;
+    }
+
+    // 64-bit family
+    if ((src == DXGI_FORMAT_D32_FLOAT_S8X24_UINT || src == DXGI_FORMAT_R32G8X24_TYPELESS || src == DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS) &&
+        (dst == DXGI_FORMAT_D32_FLOAT_S8X24_UINT || dst == DXGI_FORMAT_R32G8X24_TYPELESS || dst == DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS)) {
+        return true;
+    }
+
+    // R16G16 family
+    if ((src == DXGI_FORMAT_R16G16_FLOAT || src == DXGI_FORMAT_R16G16_UNORM || src == DXGI_FORMAT_R16G16_SNORM || src == DXGI_FORMAT_R16G16_TYPELESS) &&
+        (dst == DXGI_FORMAT_R16G16_FLOAT || dst == DXGI_FORMAT_R16G16_UNORM || dst == DXGI_FORMAT_R16G16_SNORM || dst == DXGI_FORMAT_R16G16_TYPELESS)) {
+        return true;
+    }
+
+    return false;
 }
 
 bool ExportManager::RecreateExportTextures(uint32_t width, uint32_t height, DXGI_FORMAT colorFmt, DXGI_FORMAT depthFmt, DXGI_FORMAT mvFmt) {
@@ -171,10 +228,14 @@ bool ExportManager::RecreateExportTextures(uint32_t width, uint32_t height, DXGI
         m_device->CreateSharedHandle(m_slots[i].colorTex, nullptr, GENERIC_ALL, name, &hShared);
         if (hShared) CloseHandle(hShared);
 
-        // Create Shared Depth (expose as R32_FLOAT)
-        DXGI_FORMAT exportDepthFmt = DXGI_FORMAT_R32_FLOAT;
-        if (depthFmt == DXGI_FORMAT_D16_UNORM || depthFmt == DXGI_FORMAT_R16_TYPELESS) {
-            exportDepthFmt = DXGI_FORMAT_R16_UNORM;
+        // Create Shared Depth (expose as typeless family format)
+        DXGI_FORMAT exportDepthFmt = DXGI_FORMAT_R32_TYPELESS;
+        if (depthFmt == DXGI_FORMAT_D16_UNORM || depthFmt == DXGI_FORMAT_R16_TYPELESS || depthFmt == DXGI_FORMAT_R16_UNORM || depthFmt == DXGI_FORMAT_R16_FLOAT) {
+            exportDepthFmt = DXGI_FORMAT_R16_TYPELESS;
+        } else if (depthFmt == DXGI_FORMAT_D24_UNORM_S8_UINT || depthFmt == DXGI_FORMAT_R24G8_TYPELESS || depthFmt == DXGI_FORMAT_R24_UNORM_X8_TYPELESS) {
+            exportDepthFmt = DXGI_FORMAT_R24G8_TYPELESS;
+        } else if (depthFmt == DXGI_FORMAT_D32_FLOAT_S8X24_UINT || depthFmt == DXGI_FORMAT_R32G8X24_TYPELESS || depthFmt == DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS) {
+            exportDepthFmt = DXGI_FORMAT_R32G8X24_TYPELESS;
         }
         
         desc.Format = exportDepthFmt;
@@ -225,6 +286,7 @@ bool ExportManager::RecreateExportTextures(uint32_t width, uint32_t height, DXGI
         m_device->CreateSharedHandle(m_slots[i].fence, nullptr, GENERIC_ALL, name, &hShared);
         if (hShared) CloseHandle(hShared);
 
+        m_slots[i].fenceEvent = CreateEventEx(nullptr, nullptr, 0, EVENT_ALL_ACCESS);
         m_slots[i].currentFenceValue = 0;
     }
 
@@ -289,6 +351,23 @@ void ExportManager::OnPresent(IDXGISwapChain* swapchain) {
     uint32_t slotIndex = m_sequenceNumber % 3;
     auto& slot = m_slots[slotIndex];
 
+    // Wait if GPU is still using this slot
+    if (slot.fence && slot.currentFenceValue > 0) {
+        if (slot.fence->GetCompletedValue() < slot.currentFenceValue) {
+            if (slot.fenceEvent) {
+                slot.fence->SetEventOnCompletion(slot.currentFenceValue, slot.fenceEvent);
+                WaitForSingleObject(slot.fenceEvent, INFINITE);
+            } else {
+                HANDLE hEvent = CreateEventEx(nullptr, nullptr, 0, EVENT_ALL_ACCESS);
+                if (hEvent) {
+                    slot.fence->SetEventOnCompletion(slot.currentFenceValue, hEvent);
+                    WaitForSingleObject(hEvent, INFINITE);
+                    CloseHandle(hEvent);
+                }
+            }
+        }
+    }
+
     // Reset command list
     m_cmdAllocators[slotIndex]->Reset();
     m_cmdList->Reset(m_cmdAllocators[slotIndex], nullptr);
@@ -350,20 +429,16 @@ void ExportManager::OnPresent(IDXGISwapChain* swapchain) {
         validityFlags |= 1; // Bit 0: color valid
     }
 
-    // B. Copy Depth (if candidate exists)
-    if (depthRes) {
-        D3D12_RESOURCE_STATES originalState = ResourceTracker::Instance().GetResourceState(depthRes);
-        if (originalState == D3D12_RESOURCE_STATE_COMMON) {
-            originalState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
-        }
-
+    // B. Copy Depth (if candidate exists and has valid state & compatible format)
+    D3D12_RESOURCE_STATES depthState = depthRes ? ResourceTracker::Instance().GetResourceState(depthRes) : D3D12_RESOURCE_STATE_COMMON;
+    if (depthRes && depthState != D3D12_RESOURCE_STATE_COMMON && AreFormatsCompatible(depthRes->GetDesc().Format, slot.depthTex->GetDesc().Format)) {
         D3D12_RESOURCE_BARRIER barriers[2] = {};
         int barrierCount = 0;
 
-        if (originalState != D3D12_RESOURCE_STATE_COPY_SOURCE) {
+        if (depthState != D3D12_RESOURCE_STATE_COPY_SOURCE) {
             barriers[barrierCount].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
             barriers[barrierCount].Transition.pResource = depthRes;
-            barriers[barrierCount].Transition.StateBefore = originalState;
+            barriers[barrierCount].Transition.StateBefore = depthState;
             barriers[barrierCount].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
             barriers[barrierCount].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
             barrierCount++;
@@ -381,11 +456,11 @@ void ExportManager::OnPresent(IDXGISwapChain* swapchain) {
         CopyResourceToExport(m_cmdList, depthRes, slot.depthTex);
 
         barrierCount = 0;
-        if (originalState != D3D12_RESOURCE_STATE_COPY_SOURCE) {
+        if (depthState != D3D12_RESOURCE_STATE_COPY_SOURCE) {
             barriers[barrierCount].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
             barriers[barrierCount].Transition.pResource = depthRes;
             barriers[barrierCount].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
-            barriers[barrierCount].Transition.StateAfter = originalState;
+            barriers[barrierCount].Transition.StateAfter = depthState;
             barriers[barrierCount].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
             barrierCount++;
         }
@@ -401,20 +476,16 @@ void ExportManager::OnPresent(IDXGISwapChain* swapchain) {
         validityFlags |= 2; // Bit 1: depth valid
     }
 
-    // C. Copy Motion Vectors (if candidate exists)
-    if (mvRes) {
-        D3D12_RESOURCE_STATES originalState = ResourceTracker::Instance().GetResourceState(mvRes);
-        if (originalState == D3D12_RESOURCE_STATE_COMMON) {
-            originalState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-        }
-
+    // C. Copy Motion Vectors (if candidate exists and has valid state & compatible format)
+    D3D12_RESOURCE_STATES mvState = mvRes ? ResourceTracker::Instance().GetResourceState(mvRes) : D3D12_RESOURCE_STATE_COMMON;
+    if (mvRes && mvState != D3D12_RESOURCE_STATE_COMMON && AreFormatsCompatible(mvRes->GetDesc().Format, slot.mvTex->GetDesc().Format)) {
         D3D12_RESOURCE_BARRIER barriers[2] = {};
         int barrierCount = 0;
 
-        if (originalState != D3D12_RESOURCE_STATE_COPY_SOURCE) {
+        if (mvState != D3D12_RESOURCE_STATE_COPY_SOURCE) {
             barriers[barrierCount].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
             barriers[barrierCount].Transition.pResource = mvRes;
-            barriers[barrierCount].Transition.StateBefore = originalState;
+            barriers[barrierCount].Transition.StateBefore = mvState;
             barriers[barrierCount].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
             barriers[barrierCount].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
             barrierCount++;
@@ -432,11 +503,11 @@ void ExportManager::OnPresent(IDXGISwapChain* swapchain) {
         CopyResourceToExport(m_cmdList, mvRes, slot.mvTex);
 
         barrierCount = 0;
-        if (originalState != D3D12_RESOURCE_STATE_COPY_SOURCE) {
+        if (mvState != D3D12_RESOURCE_STATE_COPY_SOURCE) {
             barriers[barrierCount].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
             barriers[barrierCount].Transition.pResource = mvRes;
             barriers[barrierCount].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
-            barriers[barrierCount].Transition.StateAfter = originalState;
+            barriers[barrierCount].Transition.StateAfter = mvState;
             barriers[barrierCount].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
             barrierCount++;
         }
@@ -467,8 +538,8 @@ void ExportManager::OnPresent(IDXGISwapChain* swapchain) {
         slotMeta.width = m_width;
         slotMeta.height = m_height;
         slotMeta.colorFormat = (uint32_t)m_colorFormat;
-        slotMeta.depthFormat = (uint32_t)depthFmt;
-        slotMeta.mvFormat = (uint32_t)mvFmt;
+        slotMeta.depthFormat = (uint32_t)slot.depthTex->GetDesc().Format;
+        slotMeta.mvFormat = (uint32_t)slot.mvTex->GetDesc().Format;
         slotMeta.fenceValue = slot.currentFenceValue;
         slotMeta.validityFlags = validityFlags;
         slotMeta.sequenceNumber = m_sequenceNumber;

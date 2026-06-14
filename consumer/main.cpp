@@ -105,13 +105,21 @@ void TryInitializeSharedResources() {
         if (hMap) {
             g_fileMapping = hMap;
             g_sharedMetadata = (SharedRingBuffer*)MapViewOfFile(hMap, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(SharedRingBuffer));
+            printf("Connected to shared memory successfully!\n");
+        } else {
+            static DWORD lastPrint = 0;
+            DWORD now = GetTickCount();
+            if (now - lastPrint > 3000) {
+                printf("Waiting for shared memory (Local\\AsyncReproj_SharedMemory)...\n");
+                lastPrint = now;
+            }
         }
     }
 
     if (g_sharedMetadata) {
         // Verify dimensions and formats, reopen if changed
         bool needsReopen = false;
-        if (g_slots[0].colorTex) {
+        if (g_slots[0].colorTex && g_sharedMetadata->slots[0].width > 0) {
             auto desc = g_slots[0].colorTex->GetDesc();
             if (desc.Width != g_sharedMetadata->slots[0].width || desc.Height != g_sharedMetadata->slots[0].height) {
                 needsReopen = true;
@@ -394,7 +402,7 @@ void Render() {
             if (slot.fence && slot.colorTex && slot.depthTex && slot.mvTex) {
                 // Check if fence completed
                 uint64_t completedVal = slot.fence->GetCompletedValue();
-                if (completedVal >= slotMeta.fenceValue) {
+                if (slotMeta.fenceValue > 0 && completedVal >= slotMeta.fenceValue) {
                     if (slotMeta.sequenceNumber >= highestSeq) {
                         highestSeq = slotMeta.sequenceNumber;
                         selectedSlot = i;
@@ -422,13 +430,23 @@ void Render() {
         g_device->CreateShaderResourceView(slot.colorTex, &srvDesc, srvHandle);
         srvHandle.ptr += srvDescriptorSize;
 
-        // Bind depth
-        srvDesc.Format = (DXGI_FORMAT)slotMeta.depthFormat;
+        // Bind depth (map typeless to typed SRV)
+        DXGI_FORMAT srvDepthFmt = (DXGI_FORMAT)slotMeta.depthFormat;
+        if (srvDepthFmt == DXGI_FORMAT_R32_TYPELESS) srvDepthFmt = DXGI_FORMAT_R32_FLOAT;
+        else if (srvDepthFmt == DXGI_FORMAT_R16_TYPELESS) srvDepthFmt = DXGI_FORMAT_R16_UNORM;
+        else if (srvDepthFmt == DXGI_FORMAT_R24G8_TYPELESS) srvDepthFmt = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
+        else if (srvDepthFmt == DXGI_FORMAT_R32G8X24_TYPELESS) srvDepthFmt = DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS;
+
+        srvDesc.Format = srvDepthFmt;
         g_device->CreateShaderResourceView(slot.depthTex, &srvDesc, srvHandle);
         srvHandle.ptr += srvDescriptorSize;
 
-        // Bind MV
-        srvDesc.Format = (DXGI_FORMAT)slotMeta.mvFormat;
+        // Bind MV (map typeless to typed SRV)
+        DXGI_FORMAT srvMVFmt = (DXGI_FORMAT)slotMeta.mvFormat;
+        if (srvMVFmt == DXGI_FORMAT_R16G16_TYPELESS) srvMVFmt = DXGI_FORMAT_R16G16_FLOAT;
+        else if (srvMVFmt == DXGI_FORMAT_R32G32_TYPELESS) srvMVFmt = DXGI_FORMAT_R32G32_FLOAT;
+
+        srvDesc.Format = srvMVFmt;
         g_device->CreateShaderResourceView(slot.mvTex, &srvDesc, srvHandle);
 
         // Update Window title with status

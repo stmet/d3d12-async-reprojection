@@ -2,58 +2,33 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <d3d12.h>
-#include <unordered_map>
+#include <unordered_set>
 #include <mutex>
 
-struct TrackedResource {
-    ID3D12Resource* resource = nullptr;
-    D3D12_RESOURCE_DESC desc = {};
-    uint64_t lastFrameActive = 0;
-    uint32_t bindCountThisFrame = 0;
-    uint32_t transitionCountThisFrame = 0;
-    uint32_t dsvBindCount = 0;
-    uint32_t rtvBindCount = 0;
-    
-    float depthScore = 0.0f;
-    float mvScore = 0.0f;
-    float colorScore = 0.0f;
-    
-    D3D12_RESOURCE_STATES currentState = D3D12_RESOURCE_STATE_COMMON;
-};
-
+// Minimal lifetime tracker for the handful of upscaler-input resources we intercept
+// (color/depth/MV). Its only job is to fire HookManager::OnResourceDestroyed when one of
+// those resources is COM-destroyed, so the intercepted pointers get nulled before they
+// dangle. It deliberately does NOT track every resource/barrier/descriptor the game
+// creates — that tracking fed a candidate-scoring heuristic that is no longer used, and
+// hooking ResourceBarrier/OMSetRenderTargets/Create*View serialized the game's parallel
+// command-recording threads on a global lock for data nothing consumed.
 class ResourceTracker {
 public:
     static ResourceTracker& Instance();
 
-    void RegisterResource(ID3D12Resource* resource, const D3D12_RESOURCE_DESC* desc);
+    // Attach a destruction callback to an intercepted resource. Idempotent and cheap, so
+    // it is safe to call every frame with the same pointer — only the first call for a
+    // given resource installs the callback. Touches the lock only for intercepted
+    // resources (a few per frame), never on the game's hot paths.
+    void TrackForDestruction(ID3D12Resource* resource);
+
+    // Invoked by the per-resource destruction callback when the COM object is released.
     void UnregisterResource(ID3D12Resource* resource);
-    
-    void RegisterDescriptor(D3D12_CPU_DESCRIPTOR_HANDLE handle, ID3D12Resource* resource);
-    ID3D12Resource* GetResourceFromDescriptor(D3D12_CPU_DESCRIPTOR_HANDLE handle);
-
-    void OnResourceTransition(ID3D12Resource* resource, D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after);
-    void OnOMSetRenderTargets(ID3D12GraphicsCommandList* cmdList, UINT numRTVs, const D3D12_CPU_DESCRIPTOR_HANDLE* rtvHandles, BOOL singleHandleRange, const D3D12_CPU_DESCRIPTOR_HANDLE* dsvHandle);
-
-    D3D12_RESOURCE_STATES GetResourceState(ID3D12Resource* resource);
-
-    void EndFrame(uint64_t frameId, uint32_t width, uint32_t height);
-    
-    ID3D12Resource* GetBestColorCandidate();
-    ID3D12Resource* GetBestDepthCandidate();
-    ID3D12Resource* GetBestMVCandidate();
-
-    void DumpDebugScores();
 
 private:
     ResourceTracker() = default;
     ~ResourceTracker() = default;
 
-    std::unordered_map<ID3D12Resource*, TrackedResource> m_resources;
-    std::unordered_map<SIZE_T, ID3D12Resource*> m_descriptors;
+    std::unordered_set<ID3D12Resource*> m_tracked;
     std::mutex m_mutex;
-
-    ID3D12Resource* m_bestColor = nullptr;
-    ID3D12Resource* m_bestDepth = nullptr;
-    ID3D12Resource* m_bestMV = nullptr;
-    uint64_t m_lastDumpFrame = 0;
 };

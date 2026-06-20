@@ -1,16 +1,20 @@
 #include "resource_tracker.h"
+#include "../hooks/hook_manager.h"
 #include "../common/logger.h"
 #include <unknwn.h>
 
 // Unique GUID for our destruction tracker
 // {4D2A9250-9E1A-4C2E-8E0E-F6DF7D8B9B1E}
-static const GUID DESTRUCTION_TRACKER_GUID = 
+static const GUID DESTRUCTION_TRACKER_GUID =
 { 0x4d2a9250, 0x9e1a, 0x4c2e, { 0x8e, 0xe, 0xf6, 0xdf, 0x7d, 0x8b, 0x9b, 0x1e } };
 
+// Lightweight COM object attached to a tracked resource via SetPrivateDataInterface.
+// When the resource is destroyed it releases its private-data interfaces, dropping this
+// object's refcount to zero, which lets us observe the destruction.
 class ResourceDestructionTracker : public IUnknown {
 public:
     ResourceDestructionTracker(ID3D12Resource* res) : m_refCount(1), m_resource(res) {}
-    
+
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppvObject) override {
         if (riid == IID_IUnknown) {
             *ppvObject = this;
@@ -19,11 +23,11 @@ public:
         }
         return E_NOINTERFACE;
     }
-    
+
     ULONG STDMETHODCALLTYPE AddRef() override {
         return InterlockedIncrement(&m_refCount);
     }
-    
+
     ULONG STDMETHODCALLTYPE Release() override {
         ULONG count = InterlockedDecrement(&m_refCount);
         if (count == 0) {
@@ -44,214 +48,59 @@ ResourceTracker& ResourceTracker::Instance() {
     return instance;
 }
 
-void ResourceTracker::RegisterResource(ID3D12Resource* resource, const D3D12_RESOURCE_DESC* desc) {
-    if (!resource || !desc) return;
-    
-    {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        if (desc->Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D) return;
+// SEH helper: contains NO C++ objects with destructors to avoid C2712 compilation error.
+static bool TrackForDestructionSafeHelper(ID3D12Resource* resource, void* trackerCOM) {
+    __try {
+        // Safe check: try to read the vtable pointer to verify readability.
+        void** vtable = *(void***)resource;
+        if (!vtable) return false;
 
-        // Skip if already tracked
-        if (m_resources.find(resource) != m_resources.end()) return;
+        HRESULT hr = resource->SetPrivateDataInterface(DESTRUCTION_TRACKER_GUID, (IUnknown*)trackerCOM);
+        return SUCCEEDED(hr);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
 
-        TrackedResource tracked = {};
-        tracked.resource = resource;
-        tracked.desc = *desc;
-        
-        m_resources[resource] = tracked;
+void ResourceTracker::TrackForDestruction(ID3D12Resource* resource) {
+    if (!resource) return;
+
+    // Check pointer alignment to prevent reading from unaligned garbage addresses.
+    if (((uintptr_t)resource & 7) != 0) {
+        LOG_WARN("TrackForDestruction: Rejected unaligned resource pointer 0x%p", resource);
+        return;
     }
 
-    // Register destruction callback outside of lock to prevent deadlock
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        // Already have a callback installed for this resource — installing a second one
+        // with the same GUID would release the first (firing UnregisterResource and
+        // nulling the very pointer we are trying to keep), so bail out early.
+        if (m_tracked.find(resource) != m_tracked.end()) return;
+    }
+
+    // Install the callback outside the lock: SetPrivateDataInterface AddRefs the tracker
+    // and won't re-enter our code for a freshly created tracker, but keeping COM calls out
+    // of the critical section avoids any lock-ordering surprises.
     ResourceDestructionTracker* tracker = new ResourceDestructionTracker(resource);
-    HRESULT hr = resource->SetPrivateDataInterface(DESTRUCTION_TRACKER_GUID, tracker);
-    tracker->Release();
+    bool ok = TrackForDestructionSafeHelper(resource, tracker);
+    tracker->Release(); // Release initial reference (SetPrivateDataInterface increments refcount internally)
+
+    if (ok) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_tracked.insert(resource);
+    } else {
+        LOG_ERROR("TrackForDestruction: CRASH AVOIDED or registration failed for resource pointer 0x%p!", resource);
+    }
 }
 
 void ResourceTracker::UnregisterResource(ID3D12Resource* resource) {
     if (!resource) return;
+
+    // Null out any intercepted pointers referencing this resource before it dangles.
+    HookManager::Instance().OnResourceDestroyed(resource);
+
     std::lock_guard<std::mutex> lock(m_mutex);
-    m_resources.erase(resource);
-
-    if (m_bestColor == resource) m_bestColor = nullptr;
-    if (m_bestDepth == resource) m_bestDepth = nullptr;
-    if (m_bestMV == resource) m_bestMV = nullptr;
-
-    for (auto it = m_descriptors.begin(); it != m_descriptors.end(); ) {
-        if (it->second == resource) {
-            it = m_descriptors.erase(it);
-        } else {
-            ++it;
-        }
-    }
-}
-
-void ResourceTracker::RegisterDescriptor(D3D12_CPU_DESCRIPTOR_HANDLE handle, ID3D12Resource* resource) {
-    if (!resource) return;
-    std::lock_guard<std::mutex> lock(m_mutex);
-    m_descriptors[handle.ptr] = resource;
-}
-
-ID3D12Resource* ResourceTracker::GetResourceFromDescriptor(D3D12_CPU_DESCRIPTOR_HANDLE handle) {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    auto it = m_descriptors.find(handle.ptr);
-    if (it != m_descriptors.end()) {
-        return it->second;
-    }
-    return nullptr;
-}
-
-void ResourceTracker::OnResourceTransition(ID3D12Resource* resource, D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after) {
-    if (!resource) return;
-    std::lock_guard<std::mutex> lock(m_mutex);
-    auto it = m_resources.find(resource);
-    if (it != m_resources.end()) {
-        it->second.transitionCountThisFrame++;
-        it->second.lastFrameActive = 1;
-        it->second.currentState = after;
-    }
-}
-
-D3D12_RESOURCE_STATES ResourceTracker::GetResourceState(ID3D12Resource* resource) {
-    if (!resource) return D3D12_RESOURCE_STATE_COMMON;
-    std::lock_guard<std::mutex> lock(m_mutex);
-    auto it = m_resources.find(resource);
-    if (it != m_resources.end()) {
-        return it->second.currentState;
-    }
-    return D3D12_RESOURCE_STATE_COMMON;
-}
-
-void ResourceTracker::OnOMSetRenderTargets(ID3D12GraphicsCommandList* cmdList, UINT numRTVs, const D3D12_CPU_DESCRIPTOR_HANDLE* rtvHandles, BOOL singleHandleRange, const D3D12_CPU_DESCRIPTOR_HANDLE* dsvHandle) {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    
-    if (dsvHandle) {
-        auto it = m_descriptors.find(dsvHandle->ptr);
-        if (it != m_descriptors.end()) {
-            auto resIt = m_resources.find(it->second);
-            if (resIt != m_resources.end()) {
-                resIt->second.dsvBindCount++;
-                resIt->second.bindCountThisFrame++;
-            }
-        }
-    }
-
-    if (rtvHandles && numRTVs > 0) {
-        auto it = m_descriptors.find(rtvHandles[0].ptr);
-        if (it != m_descriptors.end()) {
-            auto resIt = m_resources.find(it->second);
-            if (resIt != m_resources.end()) {
-                resIt->second.rtvBindCount++;
-                resIt->second.bindCountThisFrame++;
-            }
-        }
-    }
-}
-
-void ResourceTracker::EndFrame(uint64_t frameId, uint32_t width, uint32_t height) {
-    std::lock_guard<std::mutex> lock(m_mutex);
-
-    ID3D12Resource* bestDepth = nullptr;
-    float maxDepthScore = 0.0f;
-
-    ID3D12Resource* bestMV = nullptr;
-    float maxMVScore = 0.0f;
-
-    ID3D12Resource* bestColor = nullptr;
-    float maxColorScore = 0.0f;
-
-    for (auto& pair : m_resources) {
-        auto& res = pair.second;
-        auto desc = res.desc;
-
-        res.depthScore = 0.0f;
-        res.mvScore = 0.0f;
-        res.colorScore = 0.0f;
-
-        bool matchesResolution = (desc.Width == width && desc.Height == height);
-        bool reasonableResolution = (desc.Width >= width / 2 && desc.Width <= width * 2 &&
-                                     desc.Height >= height / 2 && desc.Height <= height * 2);
-
-        bool isDepthFormat = (desc.Format == DXGI_FORMAT_D32_FLOAT ||
-                              desc.Format == DXGI_FORMAT_D24_UNORM_S8_UINT ||
-                              desc.Format == DXGI_FORMAT_D32_FLOAT_S8X24_UINT ||
-                              desc.Format == DXGI_FORMAT_D16_UNORM ||
-                              desc.Format == DXGI_FORMAT_R32_TYPELESS ||
-                              desc.Format == DXGI_FORMAT_R24G8_TYPELESS);
-
-        if (isDepthFormat) res.depthScore += 50.0f;
-        if (desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL) res.depthScore += 30.0f;
-        if (res.dsvBindCount > 0) res.depthScore += 20.0f;
-        if (matchesResolution) res.depthScore += 20.0f;
-        else if (reasonableResolution) res.depthScore += 10.0f;
-
-        bool isMVFormat = (desc.Format == DXGI_FORMAT_R16G16_FLOAT ||
-                           desc.Format == DXGI_FORMAT_R16G16_UNORM ||
-                           desc.Format == DXGI_FORMAT_R16G16_SNORM ||
-                           desc.Format == DXGI_FORMAT_R32G32_FLOAT);
-
-        if (isMVFormat) res.mvScore += 50.0f;
-        if (matchesResolution) res.mvScore += 30.0f;
-        else if (reasonableResolution) res.mvScore += 15.0f;
-        if (res.transitionCountThisFrame > 0) res.mvScore += 20.0f;
-        if (!(desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL)) res.mvScore += 10.0f;
-
-        bool isColorFormat = (desc.Format == DXGI_FORMAT_R8G8B8A8_UNORM ||
-                              desc.Format == DXGI_FORMAT_B8G8R8A8_UNORM ||
-                              desc.Format == DXGI_FORMAT_R10G10B10A2_UNORM ||
-                              desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT);
-        if (isColorFormat) res.colorScore += 40.0f;
-        if (desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET) res.colorScore += 30.0f;
-        if (matchesResolution) res.colorScore += 20.0f;
-        if (res.rtvBindCount > 0) res.colorScore += 10.0f;
-
-        if (res.depthScore > maxDepthScore) {
-            maxDepthScore = res.depthScore;
-            bestDepth = res.resource;
-        }
-        if (res.mvScore > maxMVScore) {
-            maxMVScore = res.mvScore;
-            bestMV = res.resource;
-        }
-        if (res.colorScore > maxColorScore) {
-            maxColorScore = res.colorScore;
-            bestColor = res.resource;
-        }
-
-        res.bindCountThisFrame = 0;
-        res.transitionCountThisFrame = 0;
-        res.dsvBindCount = 0;
-        res.rtvBindCount = 0;
-    }
-
-    m_bestColor = bestColor;
-    m_bestDepth = bestDepth;
-    m_bestMV = bestMV;
-
-    if (frameId % 120 == 0) {
-        m_lastDumpFrame = frameId;
-        DumpDebugScores();
-    }
-}
-
-ID3D12Resource* ResourceTracker::GetBestColorCandidate() {
-    return m_bestColor;
-}
-
-ID3D12Resource* ResourceTracker::GetBestDepthCandidate() {
-    return m_bestDepth;
-}
-
-ID3D12Resource* ResourceTracker::GetBestMVCandidate() {
-    return m_bestMV;
-}
-
-void ResourceTracker::DumpDebugScores() {
-    LOG_INFO("=== Resource Tracker Candidate Scoring Dump (Frame %llu) ===", m_lastDumpFrame);
-    LOG_INFO("Total tracked resources: %zu", m_resources.size());
-    
-    LOG_INFO("Best Candidates selected:");
-    LOG_INFO("  -> Color: 0x%p (Score = %.1f)", m_bestColor, m_bestColor ? m_resources[m_bestColor].colorScore : 0.0f);
-    LOG_INFO("  -> Depth: 0x%p (Score = %.1f)", m_bestDepth, m_bestDepth ? m_resources[m_bestDepth].depthScore : 0.0f);
-    LOG_INFO("  -> Motion Vector: 0x%p (Score = %.1f)", m_bestMV, m_bestMV ? m_resources[m_bestMV].mvScore : 0.0f);
-    LOG_INFO("=========================================================");
+    m_tracked.erase(resource);
 }

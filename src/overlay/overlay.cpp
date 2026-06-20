@@ -1,8 +1,6 @@
 #include "overlay.h"
 #include "../common/logger.h"
 #include "../hooks/hook_manager.h"
-#include "../hooks/rt_tracker.h"
-#include "../export/export_manager.h"
 #include "../input/mouse_tracker.h"
 #include "../warp/warp_renderer.h"
 #include "../present/presenter.h"
@@ -51,10 +49,6 @@ WNDPROC                     s_oWndProc    = nullptr;
 // ---- Capture debug views (P1) ----
 // Three persistent SRV descriptors in the ImGui SRV heap, re-pointed each frame at the latest
 // captured color / depth / MV textures so they can be drawn with ImGui::Image.
-bool                        s_dbgAlloc    = false;
-bool                        s_showDebug   = false;
-D3D12_CPU_DESCRIPTOR_HANDLE s_dbgCpu[6]   = {};   // [3] = hud-less candidate (Track A), [4] = FG hudless, [5] = FG UI
-D3D12_GPU_DESCRIPTOR_HANDLE s_dbgGpu[6]   = {};
 
 // ---- Cursor/raw-input neutralization ----
 // Cyberpunk (and most mouselook games) clips the OS cursor to the window centre and reads camera
@@ -186,71 +180,6 @@ LRESULT CALLBACK HookedWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
     return CallWindowProcW(s_oWndProc, hwnd, msg, wParam, lParam);
 }
 
-void DrawDebugViews() {
-    DebugCapture cap{};
-    if (!ExportManager::Instance().GetDebugCapture(cap)) {
-        ImGui::TextDisabled("No capture yet — needs an FSR frame to be intercepted.");
-        return;
-    }
-
-    if (!s_dbgAlloc) {
-        for (int i = 0; i < 6; ++i)
-            s_srvAlloc.Alloc(&s_dbgCpu[i], &s_dbgGpu[i]);
-        s_dbgAlloc = true;
-    }
-
-    ImGui::Text("seq %llu   validity 0x%X", (unsigned long long)cap.seq, cap.validity);
-    ImGui::TextDisabled("bits: 1=color 2=depth 4=mv 8=upscalerParams");
-    ImGui::Text("render %ux%u   mvScale % .5f, % .5f", cap.renderW, cap.renderH, cap.mvScaleX, cap.mvScaleY);
-    ImGui::Text("near % .4f   far % .1f   fovV % .3f", cap.camNear, cap.camFar, cap.camFovV);
-    ImGui::Separator();
-
-    auto drawTex = [&](int idx, ID3D12Resource* tex, DXGI_FORMAT fmt, uint32_t w, uint32_t h, const char* label) {
-        if (!tex || w == 0 || h == 0) { ImGui::TextDisabled("%s: none", label); return; }
-        D3D12_SHADER_RESOURCE_VIEW_DESC sd = {};
-        sd.Format                  = fmt;
-        sd.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
-        sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        sd.Texture2D.MipLevels     = 1;
-        s_device->CreateShaderResourceView(tex, &sd, s_dbgCpu[idx]);
-
-        const float dw = 360.0f;
-        float dh = dw * (float)h / (float)w;
-        ImGui::Text("%s  %ux%u  fmt=%u", label, w, h, (unsigned)fmt);
-        ImGui::Image((ImTextureID)s_dbgGpu[idx].ptr, ImVec2(dw, dh));
-    };
-
-    drawTex(0, cap.color, cap.colorSrvFmt, cap.colorW, cap.colorH, "Color");
-    drawTex(1, cap.depth, cap.depthSrvFmt, cap.depthW, cap.depthH, "Depth (R)");
-    drawTex(2, cap.mv,    cap.mvSrvFmt,    cap.mvW,    cap.mvH,    "Motion (RG)");
-
-    // Track A: hud-less candidate (only when ASYNCREPROJ_HUDLESS=1).
-    if (RtTracker::Enabled()) {
-        ImGui::Separator();
-        RtTracker::Stats st = RtTracker::GetStats();
-        ImGui::Text("Hud-less: hooks %s   RTV map %u   candidates/frame %u   captures %llu",
-                    st.hooksInstalled ? "ON" : "off", st.rtvMapSize, st.candidatesLastFrame,
-                    (unsigned long long)st.captures);
-        int cp = RtTracker::GetCapturePoint();
-        const char* cpNames[] = { "first bind after upscale (scene, pre-HUD)",
-                                  "last bind before present (pre-crosshair)",
-                                  "last unbind (full HUD)" };
-        if (ImGui::Combo("capture point", &cp, cpNames, 3)) RtTracker::SetCapturePoint(cp);
-        if (st.lastCandidateW)
-            ImGui::Text("last candidate %ux%u fmt=%u", st.lastCandidateW, st.lastCandidateH, st.lastCandidateFmt);
-        uint32_t hw = 0, hh = 0; RtTracker::GetHudlessSize(hw, hh);
-        drawTex(3, RtTracker::GetHudless(), RtTracker::GetHudlessFormat(), hw, hh, "Hud-less (candidate)");
-    }
-
-    if (cap.fgHudless) {
-        ImGui::Separator();
-        drawTex(4, cap.fgHudless, cap.fgHudlessSrvFmt, cap.fgHudlessW, cap.fgHudlessH, "FG HUD-less Color");
-    }
-    if (cap.fgUi) {
-        ImGui::Separator();
-        drawTex(5, cap.fgUi, cap.fgUiSrvFmt, cap.fgUiW, cap.fgUiH, "FG UI Layer");
-    }
-}
 
 void BuildUI() {
     ImGuiIO& io = ImGui::GetIO();
@@ -454,11 +383,6 @@ void BuildUI() {
             ImGui::Separator();
             ImGui::TextDisabled("async presenter off (set ASYNCREPROJ_ASYNC=1)");
         }
-
-        ImGui::Separator();
-        ImGui::Checkbox("Capture debug views", &s_showDebug);
-        if (s_showDebug)
-            DrawDebugViews();
     }
     ImGui::End();
 }

@@ -1,16 +1,13 @@
 #include "proxy_swapchain.h"
 #include "../common/logger.h"
 #include "../hooks/hook_manager.h"
-#include "../hooks/rt_tracker.h"
-#include "../export/export_manager.h"
 #include "../overlay/overlay.h"
 #include "../warp/warp_renderer.h"
 #include "../present/presenter.h"
 
-// Shared pre-present work for the SYNCHRONOUS path: capture, warp the backbuffer (if enabled), then
-// draw the overlay. (Async mode does none of this here — the presenter thread owns it.)
+// Shared pre-present work for the SYNCHRONOUS path: warp the backbuffer (if enabled), then draw the
+// overlay. (Async mode does none of this here — the presenter thread owns it.)
 static void RunPrePresent(IDXGISwapChain4* sc) {
-    ExportManager::Instance().OnPresent(sc);
     if (ID3D12CommandQueue* q = Overlay::GetPresentQueue()) {
         UINT idx = sc->GetCurrentBackBufferIndex();
         ID3D12Resource* bb = nullptr;
@@ -63,17 +60,9 @@ void ProxySwapChain::AllocReplacementBuffers() {
     }
     LOG_INFO("Proxy(async): allocated %u replacement buffers %ux%u fmt=%u",
              m_bufferCount, d.Width, d.Height, (unsigned)d.Format);
-
-    // Hud-less tracker: tell it the swapchain signature and exclude our replacement buffers (the game
-    // composites the final UI frame into these, so they're never the hud-less candidate). No-op unless
-    // ASYNCREPROJ_HUDLESS=1.
-    RtTracker::SetSwapchainInfo(d.Width, d.Height, d.Format);
-    for (UINT i = 0; i < m_bufferCount; ++i)
-        if (m_buffers[i]) RtTracker::RegisterExcludedTarget(m_buffers[i]);
 }
 
 void ProxySwapChain::ReleaseReplacementBuffers() {
-    RtTracker::ClearExcludedTargets();   // drop stale pointers before the pool is rebuilt (resize)
     for (UINT i = 0; i < kMaxBuffers; ++i) {
         if (m_buffers[i]) { m_buffers[i]->Release(); m_buffers[i] = nullptr; }
     }
@@ -118,14 +107,10 @@ UINT STDMETHODCALLTYPE ProxySwapChain::GetCurrentBackBufferIndex() {
 
 HRESULT STDMETHODCALLTYPE ProxySwapChain::Present(UINT SyncInterval, UINT Flags) {
     if (m_async) {
-        // Capture this game frame (color from our replacement buffer, depth/MV from the FSR dispatch)
-        // so the presenter's reproject path has inputs. The proxy's GetBuffer/GetCurrentBackBufferIndex
-        // return m_buffers[m_index], and the copy is ordered on the game queue where it was rendered.
-        if (ExportManager::Instance().OnPresent(this)) {
-            // Hand the just-finished frame to the presenter and return — the game keeps its own cadence.
-            Presenter::SubmitGameFrame(m_buffers[m_index]);
-            m_index = (m_index + 1) % m_bufferCount;
-        }
+        // FG is off, so every Present is a real game frame: hand the just-finished replacement buffer
+        // to the presenter and return — the game keeps its own cadence, the presenter warps + presents.
+        Presenter::SubmitGameFrame(m_buffers[m_index]);
+        m_index = (m_index + 1) % m_bufferCount;
         return S_OK;
     }
     RunPrePresent(m_real);
@@ -135,10 +120,8 @@ HRESULT STDMETHODCALLTYPE ProxySwapChain::Present(UINT SyncInterval, UINT Flags)
 
 HRESULT STDMETHODCALLTYPE ProxySwapChain::Present1(UINT SyncInterval, UINT PresentFlags, const DXGI_PRESENT_PARAMETERS* pPresentParameters) {
     if (m_async) {
-        if (ExportManager::Instance().OnPresent(this)) {
-            Presenter::SubmitGameFrame(m_buffers[m_index]);
-            m_index = (m_index + 1) % m_bufferCount;
-        }
+        Presenter::SubmitGameFrame(m_buffers[m_index]);
+        m_index = (m_index + 1) % m_bufferCount;
         return S_OK;
     }
     RunPrePresent(m_real);

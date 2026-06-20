@@ -806,53 +806,6 @@ void WarpRenderer::ReprojectInto(ID3D12CommandQueue* queue,
     s_frameIdx++;
 }
 
-void WarpRenderer::FeedCalibration(float mvU, float mvV, float mdx, float mdy,
-                                   float screenW, float screenH) {
-    if (!s_params.autoCalibrate || screenW < 1.0f) return;
-
-    // Map mouse delta to the warp's input space: counts / screen-width, exactly as the warp does
-    // (warpU = mouseDx * gain * sign / screenW). So slope here IS the gain in the warp's units,
-    // independent of how the MV scale resolves to UV.
-    float x  = mdx / screenW;                 // horizontal mouse, warp units
-    float mv = mvU;                            // far-corner horizontal screen motion (UV)
-
-    // Only sample when both signals are meaningfully non-zero — a still camera carries no gain info
-    // and would just pull the regression toward 0. (Yaw dominates; vertical/pitch adds noise here.)
-    const float kMinMouse = 1.5f / screenW;   // ~1.5 counts
-    const float kMinMv    = 0.0008f;          // ~0.08% screen
-    if (fabsf(x) < kMinMouse || fabsf(mv) < kMinMv) return;
-
-    // Decayed least-squares through the origin: slope = Sxy / Sxx, with both accumulators decayed
-    // each accepted sample so the estimate tracks the current sensitivity (DPI/FOV changes).
-    static double Sxx = 0.0, Sxy = 0.0;
-    const double decay = 0.995;
-    Sxx = Sxx * decay + (double)x * x;
-    Sxy = Sxy * decay + (double)x * mv;
-
-    if (s_params.calSamples < 100000) s_params.calSamples++;
-
-    if (Sxx > 1e-9) {
-        double slope = Sxy / Sxx;
-        float  mag   = (float)fabs(slope);
-        s_params.calGain      = mag;
-        // Report the warp direction. Disocclusion artifacts appear on the LEADING edge — the side you're
-        // turning toward — because the virtual camera turns faster than the game and reveals new space
-        // there. That matches the negated raw slope sign.
-        s_params.detectedSign = (slope >= 0.0) ? -1.0f : 1.0f;
-        // Confidence ramps with effective sample mass (Sxx) and sample count.
-        float conf = (float)(Sxx / (Sxx + 4e-6));            // saturates as evidence accumulates
-        if (s_params.calSamples < 30) conf *= s_params.calSamples / 30.0f;
-        s_params.calConfidence = conf < 1.0f ? conf : 1.0f;
-
-        // Apply once converged and the value is sane. `calScale` lets the user trim the applied gain
-        // (auto-cal often reads a touch strong because the warp's fresh-delta window is wider than one
-        // game frame — the proper fix is auto-trim of that window). Magnitude only — never touch sign.
-        if (s_params.calConfidence > 0.5f && mag > 0.0005f && mag < 0.5f) {
-            s_params.gain = mag * s_params.calScale;
-        }
-    }
-}
-
 void WarpRenderer::Shutdown() {
     if (s_fence && s_fenceEvent) {
         s_fence->Signal(++s_fenceVal);

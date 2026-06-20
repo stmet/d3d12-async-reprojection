@@ -1,11 +1,9 @@
 #include "presenter.h"
 #include "../common/logger.h"
 #include "../hooks/hook_manager.h"
-#include "../hooks/rt_tracker.h"
 #include "../overlay/overlay.h"
 #include "../warp/warp_renderer.h"
 #include "../input/mouse_tracker.h"
-#include "../export/export_manager.h"
 
 #include <thread>
 #include <mutex>
@@ -235,52 +233,18 @@ void PresenterThread() {
         // timestamp is the input-latch instant for the frame we are about to present.
         uint64_t warpStartQpc = MouseTracker::NowQpc();
 
-        // Re-warp the latest game frame with freshly late-latched input, into the real backbuffer.
-        // Mode 2 (hybrid reproject) additionally pulls the captured depth/MV to reproject objects;
-        // the MV factor grows the longer we've been re-presenting the same game frame (async).
-        DebugCapture cap = {};
-        bool have = ExportManager::Instance().GetDebugCapture(cap);
-        bool useReproj = (WarpRenderer::Params().mode >= 2) || (have && cap.fgHudless);
-        if (useReproj) {
-            float mvFactor = 0.0f;
-            int64_t interval = s_gameIntervalQpc.load(std::memory_order_relaxed);
-            uint64_t lastGame = s_lastGameQpc.load(std::memory_order_relaxed);
-            if (interval > 0 && lastGame) {
-                uint64_t nowq = MouseTracker::NowQpc();
-                if (nowq > lastGame) {
-                    double f = (double)(nowq - lastGame) / (double)interval;
-                    // Cap at 1 game-frame ahead: extrapolating further amplifies the sawtooth snap
-                    // each time a new game frame resets the displacement, which reads as shaking.
-                    mvFactor = (float)(f > 1.0 ? 1.0 : f);
-                }
-            }
-            // HUD separation on: warp the hud-less scene + re-composite UI unwarped (cap.color = present
-            // with UI). Off (or no hud-less buffer): warp the FINAL frame as a single layer — HUD swims
-            // but there is no mask/ghost (clean low-latency baseline, and isolates warp vs. mask).
-            bool useHud = WarpRenderer::Params().hudCompose && have && cap.fgHudless;
-            ID3D12Resource* sceneTex; D3D12_RESOURCE_STATES sceneState; ID3D12Resource* hudTex;
-            if (useHud) {
-                sceneTex = cap.fgHudless; sceneState = D3D12_RESOURCE_STATE_COMMON; hudTex = cap.color;
-            } else if (have && cap.color) {
-                sceneTex = cap.color;     sceneState = D3D12_RESOURCE_STATE_COMMON; hudTex = nullptr;
-            } else {
-                sceneTex = frame;         sceneState = D3D12_RESOURCE_STATE_PRESENT; hudTex = nullptr;
-            }
-
-            WarpRenderer::Instance().ReprojectInto(s_presentQueue,
-                                                   sceneTex, sceneState,
-                                                   bb,       D3D12_RESOURCE_STATE_PRESENT,
-                                                   have ? cap.depth : nullptr, cap.depthSrvFmt,
-                                                   have ? cap.mv    : nullptr, cap.mvSrvFmt,
-                                                   mvFactor, have ? cap.camFovV : 0.0f,
-                                                   hudTex,   useHud ? D3D12_RESOURCE_STATE_COMMON : D3D12_RESOURCE_STATE_PRESENT,
-                                                   submitQpc);
-        } else {
-            WarpRenderer::Instance().WarpInto(s_presentQueue,
-                                              frame, D3D12_RESOURCE_STATE_PRESENT,
-                                              bb,    D3D12_RESOURCE_STATE_PRESENT,
-                                              submitQpc);
-        }
+        // Re-warp the freshest GPU-complete game frame (the replacement buffer the game rendered into)
+        // with freshly late-latched mouse input, DIRECTLY into the real backbuffer — no capture copies,
+        // no export ring. Mode 4 (perspective rotational) needs no depth/MV; FOV is the manual value.
+        float fovV = WarpRenderer::Params().fovDeg * 3.14159265f / 180.0f;
+        WarpRenderer::Instance().ReprojectInto(s_presentQueue,
+                                               frame, D3D12_RESOURCE_STATE_PRESENT,
+                                               bb,    D3D12_RESOURCE_STATE_PRESENT,
+                                               nullptr, DXGI_FORMAT_UNKNOWN,
+                                               nullptr, DXGI_FORMAT_UNKNOWN,
+                                               0.0f, fovV,
+                                               nullptr, D3D12_RESOURCE_STATE_PRESENT,
+                                               submitQpc);
         bb->Release();
 
         // Crisp (un-warped) menu on top of the warped frame.
@@ -435,18 +399,6 @@ void Start(IDXGISwapChain4* real, ID3D12CommandQueue* gameQueue, ID3D12Device* d
           if (d.BufferCount >= 2) s_bufferCount = d.BufferCount;   // == the replacement-pool size
       } }
 
-    // Hud-less tracker: exclude the REAL swapchain backbuffers from candidates — our own warp/overlay
-    // render into these, and they're swapchain-matching so they'd otherwise look like a hud-less RT.
-    if (RtTracker::Enabled()) {
-        for (UINT i = 0; i < s_bufferCount; ++i) {
-            ID3D12Resource* bb = nullptr;
-            if (SUCCEEDED(real->GetBuffer(i, IID_PPV_ARGS(&bb))) && bb) {
-                RtTracker::RegisterExcludedTarget(bb);
-                bb->Release();
-            }
-        }
-    }
-
     if (!s_gameFence) {
         s_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&s_gameFence));
         s_gameFenceVal = 0;
@@ -508,20 +460,6 @@ void SubmitGameFrame(ID3D12Resource* frame) {
         s_frameHistCount++;
     }
     s_params.gameFrames++;
-
-    // Gain auto-calibration: regress the far-corner motion vector (pure camera screen motion) against
-    // the mouse delta over THIS game-frame interval. Both are measured per game frame; the corner MV
-    // is ~1-2 frames stale, close enough for a slow decayed regression.
-    if (prev && nowq > prev) {
-        float mvU, mvV;
-        if (ExportManager::Instance().ReadCornerMV(mvU, mvV)) {
-            long long ax0, ay0, ax1, ay1;
-            MouseTracker::GetAccAt(prev, ax0, ay0);
-            MouseTracker::GetAccAt(nowq, ax1, ay1);
-            float mdx = (float)(ax1 - ax0), mdy = (float)(ay1 - ay0);
-            WarpRenderer::Instance().FeedCalibration(mvU, mvV, mdx, mdy, s_dispW, s_dispH);
-        }
-    }
 
     // Adaptive low-latency delay: hold the game thread here (its frame boundary) a tuned amount so the
     // next frame samples input later -> fresher content. Off = current fixed-cap behaviour (for A/B).

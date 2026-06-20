@@ -24,13 +24,6 @@ add_library(dxgi SHARED
     src/proxy/dxgi.def
     src/hooks/hook_manager.h
     src/hooks/hook_manager.cpp
-    src/hooks/rt_tracker.h
-    src/hooks/rt_tracker.cpp
-    src/hooks/upscaler_defs.h
-    src/tracker/resource_tracker.h
-    src/tracker/resource_tracker.cpp
-    src/export/export_manager.h
-    src/export/export_manager.cpp
     src/overlay/overlay.h
     src/overlay/overlay.cpp
     src/swapchain/proxy_swapchain.h

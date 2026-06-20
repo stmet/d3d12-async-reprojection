@@ -14,7 +14,7 @@
 // Tunables are exposed so the overlay menu can drive them live.
 struct WarpParams {
     bool  enable   = false;
-    int   mode     = 0;        // 0 = rotational shift; 2 = hybrid (mouse+MV objects); 3 = per-pixel MV; 4 = perspective rotational
+    int   mode     = 4;        // lean default: 4 = perspective rotational (the proven low-latency warp)
     float gain     = 0.0673f;  // mouse counts -> fraction of screen, per the v1 calibration
     float sign     = 1.0f;     // warp direction (flipped from -1: -1 sent the world the wrong way)
     float trimMs   = -11.0f;   // lead(+)/lag(-) applied to the base timestamp
@@ -26,8 +26,8 @@ struct WarpParams {
     bool  autoTrim  = true;    // presenter sets trimMs each stat window; manual slider hidden when on
     float trimScale = 0.5f;    // fraction of a game frame to lead by (0.5 = half-frame; lower = gentler)
 
-    // ---- gain auto-calibration (regress far-corner MV vs mouse delta; see FeedCalibration) ----
-    bool  autoCalibrate = true;   // continuously drive `gain` to the measured MV<->mouse slope
+    // ---- gain auto-calibration: REMOVED in the lean build (no MV capture). Manual gain only. ----
+    bool  autoCalibrate = false;  // kept for overlay compat; no effect (no calibration source)
     float calScale      = 0.8f;   // user trim on the applied auto-gain (auto-cal reads a touch strong)
     // Readouts (written by FeedCalibration, read by the overlay). detectedSign is informational
     // only — we never auto-flip `sign` (a wrong sign sends the warp backwards = nausea).
@@ -45,6 +45,8 @@ struct WarpParams {
     float camRejectK    = 1.5f;    // camera-translation false-positive rejection strength (higher = stricter)
     bool  weaponLock    = true;    // mode 4: keep near-field (weapon + optics) screen-locked, warp only the world
     float weaponDilate  = 0.05f;   // mode 4: UV radius to fill weapon-mask holes (scope lens at world depth)
+    float fovDeg        = 59.0f;   // manual vertical FOV (deg) for the mode-4 perspective warp (lean build
+                                   // has no FSR dispatch capture to read it from — tune to match the game)
 
     // ---- HUD lock (region-based; flat UI has no usable depth) — superseded by the hud-less pivot,
     // kept as a fallback. Default off (the visible circle/rectangle looks worse than the swim). ----
@@ -106,13 +108,6 @@ public:
                        float mvFactor, float fovV,
                        ID3D12Resource* hud = nullptr, D3D12_RESOURCE_STATES hudState = D3D12_RESOURCE_STATE_PRESENT,
                        uint64_t frameSubmitQpc = 0);
-
-    // Gain auto-calibration. Called once per game frame with the corner motion-vector (UV, far-field
-    // = pure camera screen motion) and the mouse delta over that same frame interval. Runs a
-    // decayed least-squares regression of cornerMV against mouseDelta/screenW; when converged, sets
-    // Params().gain = |slope|. The sign is reported but never applied automatically. No-op unless
-    // Params().autoCalibrate is on. screenW/H are the display dimensions for normalizing the delta.
-    void FeedCalibration(float mvU, float mvV, float mdx, float mdy, float screenW, float screenH);
 
     void Shutdown();
 };

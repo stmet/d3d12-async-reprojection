@@ -118,14 +118,15 @@ Ordered by expected impact.
 
 ## 6. TODO (phased — "make it happen")
 
-### Phase A — Strip to the lean core
-- [ ] A1. Remove upscaler/FG hooks from `hook_manager` (NVNGX/FSR2/FSR3/ffxConfigure/ffxDispatch/FG swapchain); keep CreateSwapChain(+ForHwnd) + Present(+1). Re-check LoadLibrary hooks.
-- [ ] A2. Delete `export/`, `tracker/resource_tracker.*`, `hooks/rt_tracker.*`, `hooks/upscaler_defs.h`; drop from CMake.
-- [ ] A3. Strip `warp_renderer` to **mode 4 only**: remove modes 0/2/3, MV/depth SRVs, hud-less compositor, auto-cal (`FeedCalibration`), `mvFactor`. Keep perspective warp + manual gain/sign + submit-relative base.
-- [ ] A4. Rewrite presenter capture: warp the **freshest complete replacement buffer** directly; remove `GetDebugCapture`/export usage, depth/MV/hud-less, auto-gain feed, adaptive-delay (shelve).
-- [ ] A5. Proxy: drop the `ExportManager::OnPresent` call; `SubmitGameFrame(m_buffers[m_index])` only. Handle real-only presents (FG off ⇒ no bypass needed).
-- [ ] A6. Trim overlay to lean tunables: gain, sign, leadMs/auto-lead, vsync, manual FOV, mode-4 weapon-lock toggle (if depth kept) — remove HUD/MV/cal/adaptive UI.
-- [ ] A7. Build clean; confirm DLL loads and presents with **FG off, FSR upscaling on**.
+### Phase A — Strip to the lean core  ✅ (built clean; DLL 662KB→611KB)
+- [x] A1. Lean `hook_manager`: detours only CreateSwapChain(+ForHwnd); Present extracted (not detoured); all upscaler/FG/LoadLibrary hooks removed.
+- [x] A2. Deleted `export/`, `tracker/`, `hooks/rt_tracker.*`, `hooks/upscaler_defs.h`; dropped from CMake.
+- [x] A4. Presenter warps the **freshest complete replacement buffer directly** via mode-4 ReprojectInto (null depth/mv/hud, manual FOV); removed export/GetDebugCapture, mvFactor, auto-gain feed.
+- [x] A5. Proxy: dropped `ExportManager::OnPresent`; async Present = `SubmitGameFrame` only (FG off ⇒ no bypass).
+- [x] A6. Overlay: removed export/rt_tracker debug-capture panel; defaults flipped (mode=4, manual gain). *(Dead UI for removed features still present — cosmetic cleanup pending.)*
+- [x] A7. Built clean; deployed. Mode-4 perspective warp of the freshest frame, no capture copies.
+- [~] A3 (partial). `FeedCalibration` removed + manual FOV added, but the shader still contains modes 0/2/3 + hud-less branches (unused at mode 4). Cosmetic strip pending; functionally lean (mode 4 with null depth/mv/hud ⇒ pure perspective warp, weapon-lock auto-off).
+- [ ] A8. Shelve/remove the `adaptiveDelay` (dc) controller — still present, default off.
 
 ### Phase B — Latency validation & tuning
 - [ ] B1. Re-add the `RT:` telemetry (mode, gain, present/game fps, inputAge, gameAge, jitter, lead).

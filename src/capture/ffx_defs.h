@@ -103,6 +103,7 @@ struct FfxFsr3DispatchDescription {
     FfxFloatCoords2D jitterOffset;
     FfxFloatCoords2D motionVectorScale;
     FfxDimensions2D  renderSize;
+    FfxDimensions2D  upscaleSize;   // present in the current FSR3 SDK layout (CP2077) — aligns cam params
     bool  enableSharpening;
     float sharpness;
     float frameTimeDelta;

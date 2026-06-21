@@ -68,9 +68,13 @@ void HandleFsr3(const FfxFsr3DispatchDescription* d) {
 }
 
 int WINAPI hkFsr3CtxDispatchUpscale(void* ctx, const FfxFsr3DispatchDescription* d) {
+    static bool logged = false;
+    if (!logged) { logged = true; LOG_INFO("DepthCapture: upscale dispatched via ffxFsr3ContextDispatchUpscale"); }
     HandleFsr3(d); return o_fsr3CtxDispatchUpscale(ctx, d);
 }
 int WINAPI hkFsr3UpscalerCtxDispatch(void* ctx, const FfxFsr3DispatchDescription* d) {
+    static bool logged = false;
+    if (!logged) { logged = true; LOG_INFO("DepthCapture: upscale dispatched via ffxFsr3UpscalerContextDispatch"); }
     HandleFsr3(d); return o_fsr3UpscalerCtxDispatch(ctx, d);
 }
 

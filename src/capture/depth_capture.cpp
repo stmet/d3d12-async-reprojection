@@ -251,13 +251,16 @@ const char* kCoverageCS =
 "cbuffer P : register(b0) { float gNearCut; float gX0; float gX1; float gY0; float gY1; uint gGX; uint gGY; uint gPad; };\n"
 "[numthreads(1,1,1)]\n"
 "void CSMain() {\n"
-"    uint n = 0;\n"
+"    uint n = 0; float dmax = 0.0f;\n"
 "    [loop] for (uint y = 0; y < gGY; ++y)\n"
 "      [loop] for (uint x = 0; x < gGX; ++x) {\n"
 "          float2 uv = float2(gX0 + (x + 0.5f) / gGX * (gX1 - gX0), gY0 + (y + 0.5f) / gGY * (gY1 - gY0));\n"
-"          if (gDepth.SampleLevel(gPt, uv, 0) > gNearCut) ++n;\n"
+"          float d = gDepth.SampleLevel(gPt, uv, 0);\n"
+"          dmax = max(dmax, d);\n"
+"          if (d > gNearCut) ++n;\n"
 "      }\n"
 "    gOut.Store(0, n);\n"
+"    gOut.Store(4, asuint(dmax));\n"   // debug: max depth seen in the ROI
 "}\n";
 
 bool BuildCoveragePipeline() {
@@ -293,10 +296,10 @@ bool BuildCoveragePipeline() {
     s_covInc = s_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
     D3D12_HEAP_PROPERTIES dh = {}; dh.Type = D3D12_HEAP_TYPE_DEFAULT;
-    D3D12_RESOURCE_DESC bd = {}; bd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER; bd.Width = sizeof(UINT); bd.Height = 1; bd.DepthOrArraySize = 1; bd.MipLevels = 1; bd.SampleDesc.Count = 1; bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR; bd.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+    D3D12_RESOURCE_DESC bd = {}; bd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER; bd.Width = 2 * sizeof(UINT); bd.Height = 1; bd.DepthOrArraySize = 1; bd.MipLevels = 1; bd.SampleDesc.Count = 1; bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR; bd.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
     if (FAILED(s_device->CreateCommittedResource(&dh, D3D12_HEAP_FLAG_NONE, &bd, D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&s_covCount)))) { s_covFailed = true; return false; }
     D3D12_HEAP_PROPERTIES rh = {}; rh.Type = D3D12_HEAP_TYPE_READBACK;
-    D3D12_RESOURCE_DESC rd = {}; rd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER; rd.Width = sizeof(UINT) * kCovRing; rd.Height = 1; rd.DepthOrArraySize = 1; rd.MipLevels = 1; rd.SampleDesc.Count = 1; rd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    D3D12_RESOURCE_DESC rd = {}; rd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER; rd.Width = 2 * sizeof(UINT) * kCovRing; rd.Height = 1; rd.DepthOrArraySize = 1; rd.MipLevels = 1; rd.SampleDesc.Count = 1; rd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
     if (FAILED(s_device->CreateCommittedResource(&rh, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&s_covReadback)))) { s_covFailed = true; return false; }
     D3D12_RANGE none = { 0, 0 }; s_covReadback->Map(0, &none, (void**)&s_covMapped);
 
@@ -357,9 +360,17 @@ void ComputeNearCoverage(ID3D12CommandQueue* queue, float nearCut) {
     if (!BuildCoveragePipeline()) return;
 
     UINT slot = s_covIdx % kCovRing;
-    // Read this slot's result from kCovRing dispatches ago (complete by now).
-    if (s_covSlotFence[slot] != 0 && s_covFence->GetCompletedValue() >= s_covSlotFence[slot])
-        s_coverage = (float)s_covMapped[slot] / (float)(kCovGridX * kCovGridY);
+    // Read this slot's result from kCovRing dispatches ago (complete by now). 2 uints/slot: count, dmaxBits.
+    if (s_covSlotFence[slot] != 0 && s_covFence->GetCompletedValue() >= s_covSlotFence[slot]) {
+        UINT cnt = s_covMapped[slot * 2];
+        s_coverage = (float)cnt / (float)(kCovGridX * kCovGridY);
+        static int dbg = 0;
+        if ((dbg++ % 120) == 0) {
+            UINT db = s_covMapped[slot * 2 + 1]; float dmax = *(float*)&db;
+            LOG_INFO("DepthCapture: coverage=%.0f%% (near=%u/%u) roiMaxDepth=%.4f nearCut=%.3f",
+                     s_coverage * 100.0f, cnt, kCovGridX * kCovGridY, dmax, nearCut);
+        }
+    }
 
     // Descriptors: [0]=SRV depth, [1]=UAV count.
     D3D12_CPU_DESCRIPTOR_HANDLE cpu = s_covHeap->GetCPUDescriptorHandleForHeapStart();
@@ -372,7 +383,7 @@ void ComputeNearCoverage(ID3D12CommandQueue* queue, float nearCut) {
     D3D12_GPU_DESCRIPTOR_HANDLE uavGpu = gpu; uavGpu.ptr += s_covInc;
     D3D12_UNORDERED_ACCESS_VIEW_DESC uav = {};
     uav.ViewDimension = D3D12_UAV_DIMENSION_BUFFER; uav.Format = DXGI_FORMAT_R32_TYPELESS;
-    uav.Buffer.FirstElement = 0; uav.Buffer.NumElements = 1; uav.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
+    uav.Buffer.FirstElement = 0; uav.Buffer.NumElements = 2; uav.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
     s_device->CreateUnorderedAccessView(s_covCount, nullptr, &uav, uavCpu);
 
     s_covAlloc[slot]->Reset();
@@ -388,7 +399,7 @@ void ComputeNearCoverage(ID3D12CommandQueue* queue, float nearCut) {
     s_covList->SetComputeRoot32BitConstants(2, 8, &c, 0);
     s_covList->Dispatch(1, 1, 1);
     Barrier(s_covList, s_covCount, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
-    s_covList->CopyBufferRegion(s_covReadback, (UINT64)slot * sizeof(UINT), s_covCount, 0, sizeof(UINT));
+    s_covList->CopyBufferRegion(s_covReadback, (UINT64)slot * 2 * sizeof(UINT), s_covCount, 0, 2 * sizeof(UINT));
     Barrier(s_covList, s_covCount, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON);
     s_covList->Close();
     ID3D12CommandList* lists[] = { s_covList };

@@ -19,6 +19,8 @@ set(IMGUI_SOURCES
 add_library(dxgi SHARED
     src/common/logger.h
     src/common/logger.cpp
+    src/common/telemetry.h
+    src/common/telemetry.cpp
     src/proxy/dxgi_proxy.h
     src/proxy/dxgi_proxy.cpp
     src/proxy/dxgi.def

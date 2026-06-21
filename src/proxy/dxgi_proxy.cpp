@@ -1,5 +1,6 @@
 #include "dxgi_proxy.h"
 #include "../common/logger.h"
+#include "../common/telemetry.h"
 #include "../hooks/hook_manager.h"
 #include <process.h>
 
@@ -98,6 +99,7 @@ extern "C" HRESULT WINAPI DXGIGetDebugInterface1(UINT Flags, REFIID riid, void**
 
 unsigned int __stdcall InitThread(void* pArguments) {
     Logger::Instance().Initialize(g_DllModule);
+    Telemetry::Init(g_DllModule);
     LOG_INFO("Worker thread started. Initializing capture core...");
 
     if (!g_RealDXGI.Load()) {
@@ -124,6 +126,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             break;
         case DLL_PROCESS_DETACH:
             HookManager::Instance().UninstallHooks();
+            Telemetry::Shutdown();
             break;
     }
     return TRUE;

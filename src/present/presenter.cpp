@@ -1,5 +1,6 @@
 #include "presenter.h"
 #include "../common/logger.h"
+#include "../common/telemetry.h"
 #include "../hooks/hook_manager.h"
 #include "../overlay/overlay.h"
 #include "../warp/warp_renderer.h"
@@ -8,6 +9,7 @@
 #include <thread>
 #include <mutex>
 #include <atomic>
+#include <cmath>
 #include <intrin.h>
 #include <dwmapi.h>
 #include <timeapi.h>
@@ -147,6 +149,57 @@ namespace dc {
     }
 }
 
+// ---- structured telemetry ----
+// Fill the config half of a sample from the live tunables (read each window + on change detection).
+Telemetry::Sample s_lastCfg;
+bool              s_cfgInit = false;
+
+void FillConfig(Telemetry::Sample& s) {
+    WarpParams& wp = WarpRenderer::Params();
+    s.enabled     = wp.enable ? 1 : 0;
+    s.mode        = wp.mode;
+    s.angular     = wp.angularGain ? 1 : 0;
+    s.sens        = wp.sensDegPer1000;
+    s.fov         = wp.fovDeg;
+    s.gain        = wp.gain;
+    s.sign        = wp.sign;
+    s.autoTrim    = wp.autoTrim ? 1 : 0;
+    s.trimMs      = wp.trimMs;
+    s.autoLead    = s_params.autoLead ? 1 : 0;
+    s.leadMs      = s_params.leadMs;
+    s.leadFloorMs = s_params.leadFloorMs;
+    s.maxFif      = s_params.maxFramesInFlight;
+    s.vsync       = s_params.syncInterval != 0 ? 1 : 0;
+    s.lateWarp    = s_params.lateWarp ? 1 : 0;
+}
+
+// Emit an EVENT row for each discrete config change since the last check, so the analyzer can pin a
+// latency shift to "you toggled X". Cheap field compares each loop; floats use a tolerance so a slider
+// drag logs a few rows, not hundreds. Continuously-driven values (auto trimMs/leadMs) are NOT events —
+// they live in the STAT stream.
+void CheckConfigEvents() {
+    Telemetry::Sample c; FillConfig(c);
+    if (!s_cfgInit) { s_lastCfg = c; s_cfgInit = true; Telemetry::Event(c, "session.begin"); return; }
+    #define EV_I(field, label) if (c.field != s_lastCfg.field) Telemetry::Event(c, label "=%d", c.field)
+    #define EV_F(field, label, tol) if (fabsf(c.field - s_lastCfg.field) > (tol)) Telemetry::Event(c, label "=%.3f", c.field)
+    EV_I(enabled,     "warp.enable");
+    EV_I(mode,        "warp.mode");
+    EV_I(angular,     "warp.angular");
+    EV_F(sens,        "warp.sens",       0.05f);
+    EV_F(fov,         "warp.fov",        0.5f);
+    EV_F(gain,        "warp.gain",       0.001f);
+    if (c.sign != s_lastCfg.sign) Telemetry::Event(c, "warp.sign=%+.0f", c.sign);
+    EV_I(autoTrim,    "warp.autotrim");
+    EV_I(autoLead,    "pace.autolead");
+    EV_F(leadFloorMs, "pace.leadfloor",  0.02f);
+    EV_I(maxFif,      "pace.maxfif");
+    EV_I(vsync,       "pace.vsync");
+    EV_I(lateWarp,    "pace.latewarp");
+    #undef EV_I
+    #undef EV_F
+    s_lastCfg = c;
+}
+
 void PresenterThread() {
     LOG_INFO("Presenter thread started (syncInterval=%d)", s_params.syncInterval);
     timeBeginPeriod(1);                 // 1 ms Sleep granularity for the pacing sleep
@@ -167,6 +220,8 @@ void PresenterThread() {
     uint64_t        cachedSubmitQpc = 0;
 
     while (s_running.load(std::memory_order_acquire)) {
+        CheckConfigEvents();   // log any tunable the user just changed (cheap; writes only on change)
+
         // Snapshot the recent submission history (the whole ring; we index it newest-first below).
         FrameRec hist[kFrameHistory];
         uint64_t histCount;
@@ -325,6 +380,20 @@ void PresenterThread() {
                          wp.lastU, wp.lastV);
             }
 
+            // Structured STAT row (config + this window's metrics) for offline analysis.
+            {
+                Telemetry::Sample ts; FillConfig(ts);
+                ts.presentFps    = s_params.presentFps;
+                ts.gameFps       = s_params.gameFps;
+                ts.refreshHz     = s_params.refreshHz;
+                ts.inputAgeMs    = s_params.inputAgeMs;
+                ts.gameAgeMs     = s_params.gameAgeMs;
+                ts.jitterMs      = s_params.jitterMs;
+                ts.missedVblanks = s_params.missedVblanks;
+                ts.gpuDepth      = s_params.gpuDepth;
+                Telemetry::Stat(ts);
+            }
+
             sumInputAge = sumGameAge = 0.0; worstJitter = 0;
             presentsInWindow = 0;
             gameFramesAtWindow = s_params.gameFrames;
@@ -426,6 +495,7 @@ void Start(IDXGISwapChain4* real, ID3D12CommandQueue* gameQueue, ID3D12Device* d
     s_running.store(true, std::memory_order_release);
     s_thread = std::thread(PresenterThread);
     LOG_INFO("Presenter: started on swapchain 0x%p (game queue 0x%p)", real, gameQueue);
+    { Telemetry::Sample s; FillConfig(s); Telemetry::Event(s, "presenter.start"); }
 }
 
 void SubmitGameFrame(ID3D12Resource* frame) {
@@ -486,6 +556,7 @@ void Stop() {
         // Not running; still release any held swapchain refs.
     } else if (s_thread.joinable()) {
         s_thread.join();
+        { Telemetry::Sample s; FillConfig(s); Telemetry::Event(s, "presenter.stop"); }
     }
     // Drain the present queue so no in-flight warp still references the replacement buffers.
     if (s_presentQueue && s_drainFence && s_drainEvent) {

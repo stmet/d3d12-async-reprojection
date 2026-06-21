@@ -325,16 +325,11 @@ void PresenterThread() {
         bool  fovSane = (capFov > 0.30f && capFov < 2.60f);   // ~17deg .. ~149deg
         wpRt.capturedFovDeg = fovSane ? capFov * 57.29578f : 0.0f;
 
-        // ADS by depth profile: Cyberpunk doesn't change FOV on aim, but the gun/optic fills the
-        // screen center-lower when aiming (hip-fire the center is distant world). Measure near-field
-        // coverage of that region from the captured depth and switch to the ADS lock profile.
         // ADS detection: hold-right-mouse is the aim intent (FOV is constant on aim and depth-coverage
-        // can't separate hip/ADS here — both proven). When ADS, optionally pause the warp entirely
-        // (adsSuppress) to present a crisp native sight — the only clean fix for the see-through optic
-        // ghost, which depth-lock fundamentally can't isolate.
+        // can't separate hip/ADS here — both proven). Swaps to the ADS lock profile below.
+        wpRt.runtimeSuppress = menuSuppress;
         wpRt.adsActive = wpRt.adsForce ||
             (wpRt.adsDetect && !menuSuppress && (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0);
-        wpRt.runtimeSuppress = menuSuppress || (wpRt.adsActive && wpRt.adsSuppress);
 
         float fovV = (wpRt.autoFov && fovSane) ? capFov : (wpRt.fovDeg * 3.14159265f / 180.0f);
         // Phase 1: feed the captured depth so mode-4 weapon/hand lock can keep the near-field

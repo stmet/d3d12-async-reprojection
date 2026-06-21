@@ -64,6 +64,8 @@ struct WarpParams {
     float camRejectK    = 1.5f;    // camera-translation false-positive rejection strength (higher = stricter)
     bool  weaponLock    = true;    // mode 4: keep near-field (weapon + optics) screen-locked, warp only the world
     float weaponDilate  = 0.05f;   // mode 4: UV radius to fill weapon-mask holes (scope lens at world depth)
+    float maskDilate    = 0.004f;  // mode 4: grow the near-mask by this UV radius to cover the soft render-res
+                                   // depth silhouette edge — kills the ghost-outline of the gun (0 = off)
     float fovDeg        = 59.0f;   // manual vertical FOV (deg) for the mode-4 perspective warp (lean build
                                    // has no FSR dispatch capture to read it from — tune to match the game)
     // ---- disocclusion / fast-flick edge handling (mode 4) ----

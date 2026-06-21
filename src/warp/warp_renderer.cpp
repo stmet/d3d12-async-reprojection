@@ -72,6 +72,8 @@ const char* kReprojectShader =
 "    uint   gUiErode;        // UI-mask erosion radius (px); rejects film-grain false positives\n"
 "    uint   gDebugView;      // 1 = output the UI mask as grayscale (tuning)\n"
 "    float  gEdgeFade;       // disocclusion fade: UV width over which out-of-frame samples ramp to black (0=off)\n"
+"    float  gMaskDilate;     // weapon-lock near-mask dilation radius (UV); grows the gun mask to cover the\n"
+"                            // soft render-res depth silhouette edge (kills the ghost outline)\n"
 "};\n"
 "struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; };\n"
 "VSOut VSMain(uint id : SV_VertexID) {\n"
@@ -103,8 +105,21 @@ const char* kReprojectShader =
 "        // and its optics stay put as a unit while the world (far depth, incl. NPC/world markers)\n"
 "        // reprojects around them. This is the VR weapon-layer trick.\n"
 "        if (gWeaponLock != 0) {\n"
+"            // Dilated near test: the captured depth is render-res (softer than the display-res color),\n"
+"            // so the gun's silhouette edge reads ambiguous and would warp into a ghost OUTLINE. Treat a\n"
+"            // pixel as gun if it OR a close neighbor is near-field, growing the mask to swallow the edge.\n"
 "            float dHere = gDepth.SampleLevel(gPt, i.uv, 0).r;\n"
-"            bool nearHere = dHere > gNearCut;\n"
+"            float dMax = dHere;\n"
+"            if (gMaskDilate > 0.0f) {\n"
+"                float2 md = float2(gMaskDilate / gAspect, gMaskDilate);\n"
+"                dMax = max(dMax, gDepth.SampleLevel(gPt, i.uv + float2( md.x, 0), 0).r);\n"
+"                dMax = max(dMax, gDepth.SampleLevel(gPt, i.uv + float2(-md.x, 0), 0).r);\n"
+"                dMax = max(dMax, gDepth.SampleLevel(gPt, i.uv + float2( 0, md.y), 0).r);\n"
+"                dMax = max(dMax, gDepth.SampleLevel(gPt, i.uv + float2( 0,-md.y), 0).r);\n"
+"                dMax = max(dMax, gDepth.SampleLevel(gPt, i.uv + md, 0).r);\n"
+"                dMax = max(dMax, gDepth.SampleLevel(gPt, i.uv - md, 0).r);\n"
+"            }\n"
+"            bool nearHere = dMax > gNearCut;\n"
 "            if (!nearHere && gWeaponDilate > 0.0f) {\n"
 "                // Fill holes inside the weapon silhouette. The scope lens/optic display renders at\n"
 "                // WORLD depth, so bare depth misclassifies it as world and warps it loose from the\n"
@@ -445,7 +460,7 @@ bool BuildReprojectPipeline() {
     params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
     params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     params[1].Constants.ShaderRegister = 0;
-    params[1].Constants.Num32BitValues = 26;
+    params[1].Constants.Num32BitValues = 27;
     params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
     D3D12_STATIC_SAMPLER_DESC samps[2] = {};
@@ -743,6 +758,7 @@ void WarpRenderer::ReprojectInto(ID3D12CommandQueue* queue,
         UINT  uiErode;
         UINT  debugView;
         float edgeFade;
+        float maskDilate;
     } consts = {
         warpU, warpV,
         s_params.mvScale * s_params.sign, s_params.mvScale * s_params.sign,
@@ -762,7 +778,8 @@ void WarpRenderer::ReprojectInto(ID3D12CommandQueue* queue,
         s_params.uiThreshold,
         (UINT)(s_params.uiErode < 0 ? 0 : s_params.uiErode),
         s_params.debugMask ? 1u : 0u,
-        s_params.edgeFade
+        s_params.edgeFade,
+        s_params.maskDilate
     };
 
     UINT slot = s_frameIdx % kFrames;
@@ -816,7 +833,7 @@ void WarpRenderer::ReprojectInto(ID3D12CommandQueue* queue,
     ID3D12DescriptorHeap* heaps[] = { s_rpSrvHeap };
     s_list->SetDescriptorHeaps(1, heaps);
     s_list->SetGraphicsRootDescriptorTable(0, gpu);
-    s_list->SetGraphicsRoot32BitConstants(1, 26, &consts, 0);
+    s_list->SetGraphicsRoot32BitConstants(1, 27, &consts, 0);
     s_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     s_list->DrawInstanced(3, 1, 0, 0);
 

@@ -283,6 +283,33 @@ void BuildUI() {
                 ImGui::SetTooltip("Fades out-of-frame samples to black over this UV width instead of smearing\n"
                                   "the clamped border pixel across the disoccluded band. A soft dark margin on\n"
                                   "fast flicks usually reads better than a streak. 0 = off (clamp smear).");
+
+            ImGui::Separator();
+            ImGui::Checkbox("weapon/hand lock (depth)", &wp.weaponLock);
+            ImGui::SameLine(); ImGui::TextDisabled("(?)");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Uses the captured depth to keep the near-field (gun + hands + optics)\n"
+                                  "screen-locked while the world reprojects around it. Needs FSR depth\n"
+                                  "capture (FSR upscaling on); auto-off until depth is flowing.");
+            if (wp.weaponLock) {
+                ImGui::SliderFloat("near cut (gun depth)", &wp.nearDepthCut, 0.0f, 1.0f, "%.3f");
+                ImGui::SameLine(); ImGui::TextDisabled("(?)");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Reversed-Z: the gun is HIGH depth. Pixels above this are treated as\n"
+                                      "gun. Lower if the gun isn't locked; raise if too much world locks.");
+                ImGui::SliderFloat("mask dilate (edge)", &wp.maskDilate, 0.0f, 0.02f, "%.4f");
+                ImGui::SameLine(); ImGui::TextDisabled("(?)");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Grows the gun mask to swallow the soft render-res depth silhouette\n"
+                                      "edge that otherwise warps into a ghost OUTLINE behind the gun. Raise\n"
+                                      "until the ghost outline disappears; too high locks a thin world band.");
+                ImGui::SliderFloat("optic fill radius", &wp.weaponDilate, 0.0f, 0.15f, "%.3f");
+                ImGui::SameLine(); ImGui::TextDisabled("(?)");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Fills world-depth holes inside the gun silhouette: digital optic\n"
+                                      "screens render at WORLD depth, so without this they warp loose from\n"
+                                      "the gun. Raise to capture the optic display.");
+            }
         }
 
         if (Presenter::AsyncEnabled()) {

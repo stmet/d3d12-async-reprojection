@@ -19,11 +19,11 @@
 // The real swapchain is created on the presenter's own queue (not the game's) so DXGI orders each
 // Present after the presenter's warp work, never against the game's rendering.
 //
-// Opt-in: only active when ASYNCREPROJ_ASYNC=1 at launch (read once by the proxy). Otherwise the
-// proxy stays on the validated synchronous present-time warp and the presenter is never started.
+// Default ON (the product). Opt OUT with ASYNCREPROJ_ASYNC=0 to fall back to the synchronous
+// present-time warp (escape hatch); the presenter is then never started.
 namespace Presenter {
 
-// True if ASYNCREPROJ_ASYNC=1 — checked once, cached. Decides at swapchain creation whether the
+// True unless ASYNCREPROJ_ASYNC=0 — checked once, cached. Decides at swapchain creation whether the
 // proxy uses replacement buffers + the presenter, or the synchronous pass-through warp.
 bool AsyncEnabled();
 

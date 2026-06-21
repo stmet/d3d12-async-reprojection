@@ -367,8 +367,14 @@ void PresenterThread() {
 } // namespace
 
 bool AsyncEnabled() {
+    // Async is the product now — default ON, no env flag required. Opt OUT with ASYNCREPROJ_ASYNC=0
+    // (escape hatch back to the synchronous present-time warp if anything ever misbehaves).
     static int cached = -1;
-    if (cached < 0) cached = (GetEnvironmentVariableW(L"ASYNCREPROJ_ASYNC", nullptr, 0) != 0) ? 1 : 0;
+    if (cached < 0) {
+        wchar_t buf[8] = {};
+        DWORD n = GetEnvironmentVariableW(L"ASYNCREPROJ_ASYNC", buf, 8);
+        cached = (n > 0 && buf[0] == L'0') ? 0 : 1;   // present unless explicitly "0"
+    }
     return cached == 1;
 }
 

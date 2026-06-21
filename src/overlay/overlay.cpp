@@ -201,14 +201,16 @@ void BuildUI() {
 
     ImGui::SetNextWindowSize(ImVec2(400.0f, 0.0f), ImGuiCond_FirstUseEver);
     if (ImGui::Begin("Async Reprojection")) {
-        ImGui::Text("Phase P3 - present-time warp");
+        ImGui::Text("Lean async reprojection");
         ImGui::Text("Application %.3f ms/frame (%.1f FPS)", 1000.0f / io.Framerate, io.Framerate);
         ImGui::Separator();
         WarpParams& wp = WarpRenderer::Params();
         ImGui::Checkbox("Enable warp", &wp.enable);
-        int modeIdx = (wp.mode == 4) ? 1 : (wp.mode == 2 ? 2 : (wp.mode == 3 ? 3 : 0));
-        if (ImGui::Combo("mode", &modeIdx, "Rotational shift\0Perspective rotational\0Hybrid (corner cancel)\0True reproject (per-pixel MV)\0"))
-            wp.mode = (modeIdx == 1) ? 4 : (modeIdx == 2 ? 2 : (modeIdx == 3 ? 3 : 0));
+        // Lean build captures no depth/MV, so only the two geometry-free warps are live: a flat UV
+        // shift (mode 0) and the FOV-correct perspective rotation (mode 4, the default).
+        int modeIdx = (wp.mode == 4) ? 1 : 0;
+        if (ImGui::Combo("mode", &modeIdx, "Rotational shift\0Perspective rotational\0"))
+            wp.mode = (modeIdx == 1) ? 4 : 0;
         // ---- gain: angular model (FOV-correct deg/count, the lean default) vs legacy flat UV gain ----
         ImGui::Checkbox("angular gain (FOV-correct deg/count)", &wp.angularGain);
         ImGui::SameLine(); ImGui::TextDisabled("(?)");
@@ -257,76 +259,6 @@ void BuildUI() {
                                   "dispatch capture to read it from). Set it to match the game's CURRENT FOV.\n"
                                   "With angular gain on, this is what makes the warp magnitude correct: when\n"
                                   "you zoom/ADS, lower this to match and the on-screen motion scales right.");
-            ImGui::Checkbox("weapon lock (near-field stays put)", &wp.weaponLock);
-            if (wp.weaponLock) {
-                ImGui::SameLine(); ImGui::TextDisabled("(?)");
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Keeps the gun + its optics/sights screen-locked (VR weapon layer)\n"
-                                      "while the world and world-anchored markers reproject around them.");
-                ImGui::SliderFloat("near cut (gun depth)", &wp.nearDepthCut, 0.0f, 1.0f, "%.3f");
-                ImGui::SliderFloat("optic fill radius", &wp.weaponDilate, 0.0f, 0.15f, "%.3f");
-                ImGui::SameLine(); ImGui::TextDisabled("(?)");
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Fills holes inside the gun (the scope lens renders at world depth).\n"
-                                      "Raise to match the lens size; 0 = off.");
-            }
-        }
-        if (wp.mode == 2 || wp.mode == 3) {
-            ImGui::SliderFloat("MV scale", &wp.mvScale, 0.0f, 2.0f, "%.3f");
-            ImGui::Text("MV factor %.2f (game-frames ahead)", wp.lastMvFactor);
-        }
-        if (wp.mode == 2) {
-            ImGui::SliderFloat("obj threshold", &wp.mvThreshold, 0.0f, 0.02f, "%.4f");
-            ImGui::SliderFloat("cam reject", &wp.camRejectK, 0.0f, 4.0f, "%.2f");
-            ImGui::SliderFloat("near cut (gun)", &wp.nearDepthCut, 0.0f, 1.0f, "%.3f");
-            ImGui::Checkbox("depth-edge guard", &wp.depthEdge);
-            ImGui::SameLine();
-            ImGui::SliderFloat("edge thr", &wp.depthEdgeThresh, 0.0f, 0.05f, "%.4f");
-        }
-
-        if (wp.mode >= 2) {
-            ImGui::Spacing();
-            ImGui::Checkbox("HUD lock (screen-anchored UI)", &wp.hudMask);
-            if (wp.hudMask) {
-                ImGui::SliderFloat("crosshair lock radius", &wp.hudCenterR, 0.0f, 0.20f, "%.3f");
-                ImGui::SliderFloat("edge HUD inset", &wp.hudEdge, 0.0f, 0.20f, "%.3f");
-                ImGui::SameLine(); ImGui::TextDisabled("(?)");
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Center disc locks the crosshair; edge inset locks the minimap/ammo/\n"
-                                      "health corners. Locked = doesn't warp (a fixed reference). World\n"
-                                      "under these zones won't reproject, so keep them just big enough.");
-            }
-
-            ImGui::Spacing();
-            ImGui::Checkbox("HUD separation (hud-less compositor)", &wp.hudCompose);
-            ImGui::SameLine(); ImGui::TextDisabled("(?)");
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("ON: warp the hud-less scene and re-composite the UI unwarped (needs a\n"
-                                  "clean hud-less buffer; prone to mask artifacts).\n"
-                                  "OFF: warp the FINAL frame as one layer — the HUD swims slightly with\n"
-                                  "the world, but there is NO mask, NO ghost, NO soup. Use this to judge\n"
-                                  "the raw reprojection quality and as a clean low-latency baseline.");
-            ImGui::BeginDisabled(!wp.hudCompose);
-            ImGui::SliderFloat("UI threshold", &wp.uiThreshold, 0.0f, 0.20f, "%.4f");
-            ImGui::SameLine(); ImGui::TextDisabled("(?)");
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("HUD-less compositor: |present - hudless| (max channel) above this is\n"
-                                  "treated as UI and re-applied UNWARPED. Raise if film grain/post leaks\n"
-                                  "the scene into the UI mask; lower if faint/translucent UI is lost.\n"
-                                  "Only used when a hud-less buffer is captured.");
-            ImGui::SliderInt("UI erode (px)", &wp.uiErode, 0, 2);
-            ImGui::SameLine(); ImGui::TextDisabled("(?)");
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Erodes the UI mask: a lone high-delta film-grain pixel surrounded by\n"
-                                  "background is rejected, so it can't ghost the unwarped frame into the\n"
-                                  "warped scene (the blur that grows with gain). Higher = more grain\n"
-                                  "rejection but thins fine UI. 1 is usually enough.");
-            ImGui::Checkbox("debug: show UI mask", &wp.debugMask);
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Output the UI mask as grayscale: white = treated as UI (kept unwarped),\n"
-                                  "black = scene (warped). If the background isn't solid black while moving,\n"
-                                  "the mask is leaking -> raise UI threshold and/or UI erode.");
-            ImGui::EndDisabled();
         }
 
         if (Presenter::AsyncEnabled()) {
@@ -367,17 +299,6 @@ void BuildUI() {
                                   "finished frame goes stale (rubberbanding). Lower = fresher frames +\n"
                                   "lower game-age; too low can cost throughput. 0 = off.");
 
-            ImGui::Checkbox("adaptive delay (Anti-Lag)", &pp.adaptiveDelay);
-            ImGui::SameLine(); ImGui::TextDisabled("(?)");
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("POC: injects a self-tuning CPU delay at the game's Present so its next\n"
-                                  "frame samples input later -> fresher content -> lower latency, without\n"
-                                  "dropping fps. Tunes via a jitter+EWMA probe (Cyberpunk's sim is decoupled,\n"
-                                  "so a fixed cap can't do this). A/B with this off.");
-            if (pp.adaptiveDelay)
-                ImGui::Text("  drain %.2f ms   sim gradient %.2f (1=floor, 0=backlogged)",
-                            pp.drainMs, pp.simGradient);
-
             ImGui::Spacing();
             ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "latency");
             ImGui::Text("  input->scanout %5.2f ms", pp.inputAgeMs);
@@ -401,7 +322,7 @@ void BuildUI() {
                                   "game is ignoring the backpressure.");
         } else {
             ImGui::Separator();
-            ImGui::TextDisabled("async presenter off (set ASYNCREPROJ_ASYNC=1)");
+            ImGui::TextDisabled("async presenter off (forced via ASYNCREPROJ_ASYNC=0)");
         }
     }
     ImGui::End();

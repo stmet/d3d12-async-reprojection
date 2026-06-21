@@ -278,17 +278,6 @@ void BuildUI() {
                 ImGui::SetTooltip("Sleep until just before vblank, then latch mouse + warp + present.\n"
                                   "Caps presents to the refresh and minimises input->photon latency.");
 
-            ImGui::Checkbox("async-compute warp", &pp.asyncCompute);
-            ImGui::SameLine();
-            if (pp.computeActive) ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.5f, 1.0f), "[COMPUTE]");
-            else                  ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "[graphics]");
-            ImGui::SameLine(); ImGui::TextDisabled("(?)");
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Run the warp on a dedicated COMPUTE queue (UAV write) instead of the\n"
-                                  "graphics queue, so the GPU scheduler interleaves it instead of serializing\n"
-                                  "it behind the game's whole frame (which tied present rate to game rate).\n"
-                                  "[COMPUTE] = active; [graphics] = fell back (no UAV backbuffer). This is\n"
-                                  "the decoupling fix — toggle to A/B against the graphics path.");
             ImGui::Checkbox("auto-lead", &pp.autoLead);
             ImGui::SameLine();
             if (pp.autoLead) ImGui::Text("vblank lead %.2f ms (auto)", pp.leadMs);
@@ -325,12 +314,6 @@ void BuildUI() {
                                   ">> game fps (the gap the inserted/warped frames are covering).");
             ImGui::Text("  present jitter %5.2f ms   missed vblanks %llu",
                         pp.jitterMs, (unsigned long long)pp.missedVblanks);
-            ImGui::Text("  warp GPU cost  %5.3f ms", pp.warpMs);
-            ImGui::SameLine(); ImGui::TextDisabled("(?)");
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Measured GPU time of the warp dispatch (timestamp queries, compute path).\n"
-                                  "If this is tiny (<1ms) yet present still can't hold the refresh, the cost\n"
-                                  "is scheduling/contention, not the warp itself.");
             ImGui::Text("  GPU pipeline depth %.1f frames", pp.gpuDepth);
             ImGui::SameLine(); ImGui::TextDisabled("(?)");
             if (ImGui::IsItemHovered())

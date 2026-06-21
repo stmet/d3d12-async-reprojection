@@ -23,7 +23,6 @@ PresenterParams            s_params;
 
 ID3D12Device*              s_device       = nullptr;
 ID3D12CommandQueue*        s_presentQueue = nullptr;   // real swapchain presents on this
-ID3D12CommandQueue*        s_computeQueue = nullptr;   // dedicated async-compute queue for the warp
 ID3D12CommandQueue*        s_gameQueue    = nullptr;   // the game's own queue (fenced)
 IDXGISwapChain4*           s_real         = nullptr;
 
@@ -172,7 +171,6 @@ void FillConfig(Telemetry::Sample& s) {
     s.maxFif      = s_params.maxFramesInFlight;
     s.vsync       = s_params.syncInterval != 0 ? 1 : 0;
     s.lateWarp    = s_params.lateWarp ? 1 : 0;
-    s.asyncCompute = s_params.asyncCompute ? 1 : 0;
 }
 
 // Emit an EVENT row for each discrete config change since the last check, so the analyzer can pin a
@@ -197,7 +195,6 @@ void CheckConfigEvents() {
     EV_I(maxFif,      "pace.maxfif");
     EV_I(vsync,       "pace.vsync");
     EV_I(lateWarp,    "pace.latewarp");
-    EV_I(asyncCompute,"pace.asynccompute");
     #undef EV_I
     #undef EV_F
     s_lastCfg = c;
@@ -295,49 +292,25 @@ void PresenterThread() {
         // with freshly late-latched mouse input, DIRECTLY into the real backbuffer — no capture copies,
         // no export ring. Mode 4 (perspective rotational) needs no depth/MV; FOV is the manual value.
         float fovV = WarpRenderer::Params().fovDeg * 3.14159265f / 180.0f;
-        bool warpedOnCompute = false;
-        if (s_params.asyncCompute && s_computeQueue) {
-            // Async-compute path: warp on the compute queue, then make the present queue wait on the
-            // compute fence (GPU-side, no CPU stall) before the overlay + present run on it. This takes
-            // the warp off the game's graphics submission so it isn't serialized behind the game frame.
-            ID3D12Fence* wf = nullptr; UINT64 wv = 0;
-            if (WarpRenderer::Instance().WarpComputeInto(s_computeQueue,
-                                                         frame, D3D12_RESOURCE_STATE_PRESENT,
-                                                         bb,    D3D12_RESOURCE_STATE_PRESENT,
-                                                         fovV, submitQpc, &wf, &wv) && wf) {
-                // Compute produced the warp into scratch; gate the present queue on it, then copy scratch
-                // -> backbuffer on the present queue (the backbuffer's owner — a compute write is denied).
-                s_presentQueue->Wait(wf, wv);
-                if (WarpRenderer::Instance().CopyScratchToBackbuffer(s_presentQueue, bb, D3D12_RESOURCE_STATE_PRESENT)) {
-                    warpedOnCompute = true;
-                    s_params.computeActive = true;
-                }
-            }
-        }
-        if (!warpedOnCompute) {
-            // Graphics fallback (no UAV backbuffer / compute disabled): warp on the present queue.
-            WarpRenderer::Instance().ReprojectInto(s_presentQueue,
-                                                   frame, D3D12_RESOURCE_STATE_PRESENT,
-                                                   bb,    D3D12_RESOURCE_STATE_PRESENT,
-                                                   nullptr, DXGI_FORMAT_UNKNOWN,
-                                                   nullptr, DXGI_FORMAT_UNKNOWN,
-                                                   0.0f, fovV,
-                                                   nullptr, D3D12_RESOURCE_STATE_PRESENT,
-                                                   submitQpc);
-            s_params.computeActive = false;
-        }
+        WarpRenderer::Instance().ReprojectInto(s_presentQueue,
+                                               frame, D3D12_RESOURCE_STATE_PRESENT,
+                                               bb,    D3D12_RESOURCE_STATE_PRESENT,
+                                               nullptr, DXGI_FORMAT_UNKNOWN,
+                                               nullptr, DXGI_FORMAT_UNKNOWN,
+                                               0.0f, fovV,
+                                               nullptr, D3D12_RESOURCE_STATE_PRESENT,
+                                               submitQpc);
         bb->Release();
 
-        // Device-removal diagnostic: if the warp (esp. the compute path) faulted the GPU, capture the
-        // reason once instead of silently dying in the next D3D call.
+        // Device-removal diagnostic: if the warp faulted the GPU, capture the reason once instead of
+        // silently dying in the next D3D call.
         if (s_device) {
             HRESULT rr = s_device->GetDeviceRemovedReason();
             if (rr != S_OK) {
                 static bool loggedRemoved = false;
                 if (!loggedRemoved) {
                     loggedRemoved = true;
-                    LOG_ERROR("Presenter: DEVICE REMOVED after warp (computePath=%d warpGpu=%.3fms) reason=0x%08X",
-                              warpedOnCompute ? 1 : 0, WarpRenderer::Instance().LastWarpGpuMs(), (unsigned)rr);
+                    LOG_ERROR("Presenter: DEVICE REMOVED after warp reason=0x%08X", (unsigned)rr);
                 }
             }
         }
@@ -410,14 +383,12 @@ void PresenterThread() {
             // under-covers the displayed frame's true staleness, which reads as decoupling/rubberband.
             {
                 WarpParams& wp = WarpRenderer::Params();
-                s_params.warpMs = WarpRenderer::Instance().LastWarpGpuMs();
                 double presentIntervalMs = s_params.presentFps > 1.0f ? 1000.0 / s_params.presentFps : 0.0;
-                LOG_INFO("RT: mode=%d en=%d ang=%d sens=%.2f sign=%+.0f trim=%.1f fov=%.0f | present=%.0f game=%.0f refresh=%.0f (interval=%.1fms) | inputAge=%.1f gameAge=%.1f jitter=%.1f | lead=%.2f(floor=%.2f) gpuDepth=%.1f fif=%d | compute=%d warpGpu=%.3fms | warp=(%.4f,%.4f)",
+                LOG_INFO("RT: mode=%d en=%d ang=%d sens=%.2f sign=%+.0f trim=%.1f fov=%.0f | present=%.0f game=%.0f refresh=%.0f (interval=%.1fms) | inputAge=%.1f gameAge=%.1f jitter=%.1f | lead=%.2f(floor=%.2f) gpuDepth=%.1f fif=%d | warp=(%.4f,%.4f)",
                          wp.mode, wp.enable ? 1 : 0, wp.angularGain ? 1 : 0, wp.sensDegPer1000, wp.sign, wp.trimMs, wp.fovDeg,
                          s_params.presentFps, s_params.gameFps, s_params.refreshHz, presentIntervalMs,
                          s_params.inputAgeMs, s_params.gameAgeMs, s_params.jitterMs,
                          s_params.leadMs, s_params.leadFloorMs, s_params.gpuDepth, s_params.maxFramesInFlight,
-                         s_params.computeActive ? 1 : 0, s_params.warpMs,
                          wp.lastU, wp.lastV);
             }
 
@@ -432,8 +403,6 @@ void PresenterThread() {
                 ts.jitterMs      = s_params.jitterMs;
                 ts.missedVblanks = s_params.missedVblanks;
                 ts.gpuDepth      = s_params.gpuDepth;
-                ts.warpMs        = s_params.warpMs;
-                ts.compute       = s_params.computeActive ? 1 : 0;
                 Telemetry::Stat(ts);
             }
 
@@ -519,26 +488,6 @@ void Start(IDXGISwapChain4* real, ID3D12CommandQueue* gameQueue, ID3D12Device* d
           if (d.BufferCount >= 2) s_bufferCount = d.BufferCount;   // == the replacement-pool size
       } }
 
-    // Dedicated async-compute queue for the warp (the decoupling fix). Request GLOBAL_REALTIME (the
-    // VR-compositor priority) so the scheduler favours the warp at vblank; fall back if the driver
-    // won't grant it. Without a UAV backbuffer we can't use it — the loop falls back to graphics.
-    if (!s_computeQueue) {
-        D3D12_COMMAND_QUEUE_DESC cq = {};
-        cq.Type = D3D12_COMMAND_LIST_TYPE_COMPUTE;
-        cq.Priority = D3D12_COMMAND_QUEUE_PRIORITY_GLOBAL_REALTIME;
-        const char* prio = "realtime";
-        if (FAILED(s_device->CreateCommandQueue(&cq, IID_PPV_ARGS(&s_computeQueue)))) {
-            cq.Priority = D3D12_COMMAND_QUEUE_PRIORITY_HIGH; prio = "high";
-            if (FAILED(s_device->CreateCommandQueue(&cq, IID_PPV_ARGS(&s_computeQueue)))) {
-                cq.Priority = D3D12_COMMAND_QUEUE_PRIORITY_NORMAL; prio = "normal";
-                if (FAILED(s_device->CreateCommandQueue(&cq, IID_PPV_ARGS(&s_computeQueue)))) {
-                    s_computeQueue = nullptr; prio = "FAILED";
-                }
-            }
-        }
-        LOG_INFO("Presenter: compute queue 0x%p (priority=%s) — warp via scratch UAV + copy", s_computeQueue, prio);
-    }
-
     if (!s_gameFence) {
         s_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&s_gameFence));
         s_gameFenceVal = 0;
@@ -621,21 +570,12 @@ void Stop() {
         s_thread.join();
         { Telemetry::Sample s; FillConfig(s); Telemetry::Event(s, "presenter.stop"); }
     }
-    // Drain the compute + present queues so no in-flight warp still references the replacement buffers.
-    if (s_drainFence && s_drainEvent) {
-        if (s_computeQueue) {
-            s_computeQueue->Signal(s_drainFence, ++s_drainVal);
-            if (s_drainFence->GetCompletedValue() < s_drainVal) {
-                s_drainFence->SetEventOnCompletion(s_drainVal, s_drainEvent);
-                WaitForSingleObject(s_drainEvent, INFINITE);
-            }
-        }
-        if (s_presentQueue) {
-            s_presentQueue->Signal(s_drainFence, ++s_drainVal);
-            if (s_drainFence->GetCompletedValue() < s_drainVal) {
-                s_drainFence->SetEventOnCompletion(s_drainVal, s_drainEvent);
-                WaitForSingleObject(s_drainEvent, INFINITE);
-            }
+    // Drain the present queue so no in-flight warp still references the replacement buffers.
+    if (s_presentQueue && s_drainFence && s_drainEvent) {
+        s_presentQueue->Signal(s_drainFence, ++s_drainVal);
+        if (s_drainFence->GetCompletedValue() < s_drainVal) {
+            s_drainFence->SetEventOnCompletion(s_drainVal, s_drainEvent);
+            WaitForSingleObject(s_drainEvent, INFINITE);
         }
     }
     { std::lock_guard<std::mutex> lk(s_mtx); s_haveFrame = false; s_latestFrame = nullptr;
@@ -651,7 +591,6 @@ void Shutdown() {
     if (s_drainFence) { s_drainFence->Release(); s_drainFence = nullptr; }
     if (s_drainEvent) { CloseHandle(s_drainEvent); s_drainEvent = nullptr; }
     if (s_limiterEvent) { CloseHandle(s_limiterEvent); s_limiterEvent = nullptr; }
-    if (s_computeQueue) { s_computeQueue->Release(); s_computeQueue = nullptr; }
     if (s_presentQueue) { s_presentQueue->Release(); s_presentQueue = nullptr; }
 }
 

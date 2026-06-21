@@ -31,7 +31,6 @@ struct Sample {
     int   maxFif       = 0;
     int   vsync        = 0;
     int   lateWarp     = 0;
-    int   asyncCompute = 0;   // config: async-compute warp requested
     // ---- windowed metrics (STAT rows) ----
     float presentFps   = 0.0f;
     float gameFps      = 0.0f;
@@ -41,8 +40,6 @@ struct Sample {
     float jitterMs     = 0.0f;
     unsigned long long missedVblanks = 0;  // cumulative (analyzer differences successive rows)
     float gpuDepth     = 0.0f;
-    float warpMs       = 0.0f;   // measured warp GPU time (compute path timestamps)
-    int   compute      = 0;      // warp ran on the async-compute queue this window
 };
 
 // Open <dll dir>/dxgi_telemetry.csv (CREATE_ALWAYS) and write the header. Safe to call once.

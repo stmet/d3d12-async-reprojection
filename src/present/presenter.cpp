@@ -62,6 +62,7 @@ std::atomic<int64_t>       s_gameIntervalQpc{0};        // smoothed interval bet
 // Display dimensions (cached at Start) — used to normalize the mouse delta for gain calibration,
 // matching the warp's own screen-width normalization so the regressed slope IS the warp gain.
 float                      s_dispW = 0.0f, s_dispH = 0.0f;
+float                      s_baseFov = 0.0f;   // hip-fire FOV baseline (slow max) for FOV-based ADS detection
 
 std::thread                s_thread;
 std::atomic<bool>          s_running{false};
@@ -316,13 +317,21 @@ void PresenterThread() {
         // no camera motion to hide and warping would just swim the UI.
         WarpParams& wpRt = WarpRenderer::Params();
         wpRt.runtimeSuppress = wpRt.menuDetect && Overlay::InGameMenu();
-        // ADS detection: hold-right-mouse is the aim intent (works through the ADS-in animation). The
-        // warp swaps to the ADS weapon-lock profile while active. Global async key state — independent
-        // of the game's raw-input capture. Suppressed while our overlay is open (RMB may click the UI).
-        wpRt.adsActive = wpRt.adsForce ||
-            (wpRt.adsDetect && !wpRt.runtimeSuppress && (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0);
 
-        float fovV = WarpRenderer::Params().fovDeg * 3.14159265f / 180.0f;
+        // Captured vertical FOV (radians) from the FSR dispatch. Drives auto-FOV (so the warp + angular
+        // gain track the game's real/zoomed FOV) and FOV-based ADS detection. Sanity-guarded so junk
+        // capture falls back to the manual FOV and never breaks the warp.
+        DepthCapture::Cam cam; bool haveCam = DepthCapture::GetLatest(nullptr, nullptr, &cam);
+        float capFov = haveCam ? cam.fovV : 0.0f;
+        bool  fovSane = (capFov > 0.30f && capFov < 2.60f);   // ~17deg .. ~149deg
+        if (fovSane) s_baseFov = (capFov > s_baseFov) ? capFov : (s_baseFov * 0.999f);  // hip-fire FOV = slow max
+        wpRt.capturedFovDeg = fovSane ? capFov * 57.29578f : 0.0f;
+
+        // ADS = the game zoomed in (FOV narrowed well below the hip-fire baseline).
+        wpRt.adsActive = wpRt.adsForce ||
+            (wpRt.adsDetect && fovSane && s_baseFov > 0.01f && capFov < wpRt.adsFovRatio * s_baseFov);
+
+        float fovV = (wpRt.autoFov && fovSane) ? capFov : (wpRt.fovDeg * 3.14159265f / 180.0f);
         // Phase 1: feed the captured depth so mode-4 weapon/hand lock can keep the near-field
         // (gun + optics) screen-locked while the world reprojects. Null until the first FSR dispatch,
         // in which case the warp falls back to pure rotation (weapon-lock auto-off).

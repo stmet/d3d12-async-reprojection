@@ -263,13 +263,19 @@ void BuildUI() {
 
         if (wp.mode == 4) {
             ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.5f, 1.0f), "perspective rotational (fold-free, depth-independent)");
-            ImGui::SliderFloat("vertical FOV (deg)", &wp.fovDeg, 30.0f, 110.0f, "%.0f");
+            ImGui::Checkbox("auto FOV (from FSR capture)", &wp.autoFov);
+            ImGui::SameLine();
+            if (wp.capturedFovDeg > 0.0f) ImGui::Text("captured %.1f deg", wp.capturedFovDeg);
+            else                          ImGui::TextDisabled("(no capture)");
             ImGui::SameLine(); ImGui::TextDisabled("(?)");
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Manual vertical FOV for the perspective warp (the lean build has no FSR\n"
-                                  "dispatch capture to read it from). Set it to match the game's CURRENT FOV.\n"
-                                  "With angular gain on, this is what makes the warp magnitude correct: when\n"
-                                  "you zoom/ADS, lower this to match and the on-screen motion scales right.");
+                ImGui::SetTooltip("Use the real vertical FOV captured from the FSR dispatch. This keeps the\n"
+                                  "warp + angular gain correct automatically as you zoom/ADS (no manual\n"
+                                  "matching), and powers FOV-based ADS detection. Falls back to the manual\n"
+                                  "slider below if capture is unavailable.");
+            ImGui::BeginDisabled(wp.autoFov && wp.capturedFovDeg > 0.0f);
+            ImGui::SliderFloat("manual FOV (deg)", &wp.fovDeg, 30.0f, 110.0f, "%.0f");
+            ImGui::EndDisabled();
             ImGui::SliderFloat("max warp (deg)", &wp.maxWarpDeg, 0.0f, 40.0f, "%.0f");
             ImGui::SameLine(); ImGui::TextDisabled("(?)");
             if (ImGui::IsItemHovered())
@@ -311,15 +317,22 @@ void BuildUI() {
                                       "the gun. Raise to capture the optic display.");
 
                 ImGui::Spacing();
-                ImGui::Checkbox("ADS profile (right-mouse)", &wp.adsDetect);
+                ImGui::Checkbox("ADS profile (auto by FOV)", &wp.adsDetect);
                 ImGui::SameLine();
                 ImGui::TextColored(wp.adsActive ? ImVec4(1.0f, 0.85f, 0.3f, 1.0f) : ImVec4(0.5f, 0.7f, 1.0f, 1.0f),
                                    wp.adsActive ? "[ADS]" : "[hip]");
                 ImGui::SameLine(); ImGui::TextDisabled("(?)");
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("While aiming (hold right-mouse) the optic moves closer and fills more\n"
-                                      "of the screen, so hip settings ghost it. This swaps to a separate ADS\n"
-                                      "lock profile below. Detected from hold-RMB (Cyberpunk default).");
+                    ImGui::SetTooltip("While aiming, the optic moves closer and fills more of the screen, so\n"
+                                      "hip settings ghost it. Detected from the captured FOV narrowing (zoom)\n"
+                                      "below the hip-fire baseline — works regardless of keybind. Swaps to the\n"
+                                      "separate ADS lock profile below. Needs auto-FOV / FSR capture.");
+                ImGui::SliderFloat("ADS FOV ratio", &wp.adsFovRatio, 0.5f, 0.99f, "%.2f");
+                ImGui::SameLine(); ImGui::TextDisabled("(?)");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("ADS triggers when captured FOV drops below this fraction of your\n"
+                                      "hip-fire FOV. Lower = only strong zoom counts as ADS; higher = even a\n"
+                                      "slight zoom triggers it.");
                 ImGui::Checkbox("force ADS (tuning)", &wp.adsForce);
                 ImGui::SameLine(); ImGui::TextDisabled("(?)");
                 if (ImGui::IsItemHovered())

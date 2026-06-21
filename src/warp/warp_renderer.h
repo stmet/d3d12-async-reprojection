@@ -70,14 +70,18 @@ struct WarpParams {
     // more of the screen, so the hip-fire lock settings ghost the sight. ADS is detected from hold-RMB
     // (intent-based, works through the ADS-in animation); these params replace nearDepthCut/maskDilate/
     // weaponDilate while ADS is active. Default = hip values; tune separately for your optics. ----
-    bool  adsDetect     = true;    // auto-switch to the ADS profile while right-mouse is held
-    bool  adsForce      = false;   // force the ADS profile on (for tuning without holding RMB)
-    bool  adsActive     = false;   // runtime: set by the presenter (RMB held or forced)
+    bool  adsDetect     = true;    // auto-switch to the ADS profile when the captured FOV narrows (zoom)
+    float adsFovRatio   = 0.88f;   // ADS when captured FOV < this fraction of the hip-fire (baseline) FOV
+    bool  adsForce      = false;   // force the ADS profile on (for tuning)
+    bool  adsActive     = false;   // runtime: set by the presenter (FOV-zoom detected or forced)
     float adsNearCut    = 0.95f;   // ADS near/far depth threshold
     float adsMaskDilate = 0.006f;  // ADS silhouette-edge mask dilation
     float adsWeaponDilate = 0.095f;// ADS optic-hole fill radius
-    float fovDeg        = 59.0f;   // manual vertical FOV (deg) for the mode-4 perspective warp (lean build
-                                   // has no FSR dispatch capture to read it from — tune to match the game)
+    float fovDeg        = 59.0f;   // manual vertical FOV (deg) fallback for the mode-4 perspective warp
+    bool  autoFov       = true;    // use the FSR-captured vertical FOV instead of fovDeg. This also makes
+                                   // the angular gain auto-scale with ADS/zoom (narrower FOV -> the warp
+                                   // magnitude grows correctly) and drives FOV-based ADS detection.
+    float capturedFovDeg = 0.0f;   // runtime readout of the captured FOV (deg); 0 = none/insane
     // ---- disocclusion / fast-flick edge handling (mode 4) ----
     // We have no render guard band (only the final frame), so rotating past the frame edge has no source
     // data. maxWarpDeg caps the per-present rotation so the disoccluded band can't get huge on fast

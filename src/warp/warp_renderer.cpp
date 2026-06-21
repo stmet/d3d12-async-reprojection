@@ -738,6 +738,12 @@ void WarpRenderer::ReprojectInto(ID3D12CommandQueue* queue,
     s_lastPresentQpc = now;
     s_params.lastU = warpU; s_params.lastV = warpV; s_params.lastMvFactor = mvFactor;
 
+    // ADS vs hip weapon-lock profile (the optic needs different lock settings when aiming).
+    const bool  ads             = s_params.adsActive;
+    const float effNearCut      = ads ? s_params.adsNearCut    : s_params.nearDepthCut;
+    const float effWeaponDilate = ads ? s_params.adsWeaponDilate : s_params.weaponDilate;
+    const float effMaskDilate   = ads ? s_params.adsMaskDilate : s_params.maskDilate;
+
     struct RPConsts {
         float warpU, warpV;
         float mvScaleX, mvScaleY;
@@ -768,10 +774,10 @@ void WarpRenderer::ReprojectInto(ID3D12CommandQueue* queue,
         s_params.depthEdge ? 1u : 0u,
         (UINT)s_params.mode,
         effEnable ? 1u : 0u,
-        s_params.nearDepthCut, s_params.camRejectK,
+        effNearCut, s_params.camRejectK,
         tanHalfV, aspect, yaw, pitch,
         (s_params.weaponLock && depth) ? 1u : 0u,  // only when real depth is bound
-        s_params.weaponDilate,
+        effWeaponDilate,
         s_params.hudMask ? 1u : 0u,
         s_params.hudCenterR, s_params.hudEdge,
         hud ? 1u : 0u,
@@ -779,7 +785,7 @@ void WarpRenderer::ReprojectInto(ID3D12CommandQueue* queue,
         (UINT)(s_params.uiErode < 0 ? 0 : s_params.uiErode),
         s_params.debugMask ? 1u : 0u,
         s_params.edgeFade,
-        s_params.maskDilate
+        effMaskDilate
     };
 
     UINT slot = s_frameIdx % kFrames;

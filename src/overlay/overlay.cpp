@@ -309,6 +309,25 @@ void BuildUI() {
                     ImGui::SetTooltip("Fills world-depth holes inside the gun silhouette: digital optic\n"
                                       "screens render at WORLD depth, so without this they warp loose from\n"
                                       "the gun. Raise to capture the optic display.");
+
+                ImGui::Spacing();
+                ImGui::Checkbox("ADS profile (right-mouse)", &wp.adsDetect);
+                ImGui::SameLine();
+                ImGui::TextColored(wp.adsActive ? ImVec4(1.0f, 0.85f, 0.3f, 1.0f) : ImVec4(0.5f, 0.7f, 1.0f, 1.0f),
+                                   wp.adsActive ? "[ADS]" : "[hip]");
+                ImGui::SameLine(); ImGui::TextDisabled("(?)");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("While aiming (hold right-mouse) the optic moves closer and fills more\n"
+                                      "of the screen, so hip settings ghost it. This swaps to a separate ADS\n"
+                                      "lock profile below. Detected from hold-RMB (Cyberpunk default).");
+                ImGui::Checkbox("force ADS (tuning)", &wp.adsForce);
+                ImGui::SameLine(); ImGui::TextDisabled("(?)");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Forces the ADS profile on so you can tune its sliders without holding\n"
+                                      "right-mouse. Turn off when done.");
+                ImGui::SliderFloat("ADS near cut",     &wp.adsNearCut,    0.0f, 1.0f,  "%.3f");
+                ImGui::SliderFloat("ADS mask dilate",  &wp.adsMaskDilate, 0.0f, 0.02f, "%.4f");
+                ImGui::SliderFloat("ADS optic fill",   &wp.adsWeaponDilate,0.0f, 0.15f,"%.3f");
             }
         }
 

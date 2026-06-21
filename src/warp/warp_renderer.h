@@ -66,6 +66,16 @@ struct WarpParams {
     float weaponDilate  = 0.095f;  // mode 4: UV radius to fill weapon-mask holes (scope lens at world depth)
     float maskDilate    = 0.006f;  // mode 4: grow the near-mask by this UV radius to cover the soft render-res
                                    // depth silhouette edge — kills the ghost-outline of the gun (0 = off)
+    // ---- ADS (aim-down-sights) weapon-lock profile. When aiming, the optic moves closer and fills
+    // more of the screen, so the hip-fire lock settings ghost the sight. ADS is detected from hold-RMB
+    // (intent-based, works through the ADS-in animation); these params replace nearDepthCut/maskDilate/
+    // weaponDilate while ADS is active. Default = hip values; tune separately for your optics. ----
+    bool  adsDetect     = true;    // auto-switch to the ADS profile while right-mouse is held
+    bool  adsForce      = false;   // force the ADS profile on (for tuning without holding RMB)
+    bool  adsActive     = false;   // runtime: set by the presenter (RMB held or forced)
+    float adsNearCut    = 0.95f;   // ADS near/far depth threshold
+    float adsMaskDilate = 0.006f;  // ADS silhouette-edge mask dilation
+    float adsWeaponDilate = 0.095f;// ADS optic-hole fill radius
     float fovDeg        = 59.0f;   // manual vertical FOV (deg) for the mode-4 perspective warp (lean build
                                    // has no FSR dispatch capture to read it from — tune to match the game)
     // ---- disocclusion / fast-flick edge handling (mode 4) ----

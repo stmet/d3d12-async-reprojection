@@ -316,6 +316,11 @@ void PresenterThread() {
         // no camera motion to hide and warping would just swim the UI.
         WarpParams& wpRt = WarpRenderer::Params();
         wpRt.runtimeSuppress = wpRt.menuDetect && Overlay::InGameMenu();
+        // ADS detection: hold-right-mouse is the aim intent (works through the ADS-in animation). The
+        // warp swaps to the ADS weapon-lock profile while active. Global async key state — independent
+        // of the game's raw-input capture. Suppressed while our overlay is open (RMB may click the UI).
+        wpRt.adsActive = wpRt.adsForce ||
+            (wpRt.adsDetect && !wpRt.runtimeSuppress && (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0);
 
         float fovV = WarpRenderer::Params().fovDeg * 3.14159265f / 180.0f;
         // Phase 1: feed the captured depth so mode-4 weapon/hand lock can keep the near-field

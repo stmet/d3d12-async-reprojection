@@ -323,10 +323,17 @@ void BuildUI() {
                                    wp.adsActive ? "[ADS]" : "[hip]");
                 ImGui::SameLine(); ImGui::TextDisabled("(?)");
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("While aiming (hold right-mouse) the optic needs a different lock profile.\n"
-                                      "FOV and depth-coverage can't detect ADS in this game (FOV is constant on\n"
-                                      "aim; the weapon stays offset and the optic renders at world depth), so\n"
-                                      "RMB is the reliable signal. Swaps to the ADS lock profile below.");
+                    ImGui::SetTooltip("Detects aim from hold-right-mouse (FOV and depth-coverage can't detect\n"
+                                      "ADS in this game). Drives the ADS behaviour below.");
+                ImGui::Checkbox("ADS: pause warp (kills optic ghost)", &wp.adsSuppress);
+                ImGui::SameLine(); ImGui::TextDisabled("(?)");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("ON (recommended): while aiming, present native (no warp) for a crisp,\n"
+                                      "ghost-free sight picture. A see-through optic is world-depth, so depth-\n"
+                                      "lock can't isolate its reticle -- this sidesteps it. You give up the\n"
+                                      "180Hz extrapolation while aiming (you move slowly then anyway).\n"
+                                      "OFF: keep warping during ADS using the lock profile below (smoother,\n"
+                                      "but the optic will ghost).");
                 ImGui::Checkbox("force ADS (tuning)", &wp.adsForce);
                 ImGui::SameLine(); ImGui::TextDisabled("(?)");
                 if (ImGui::IsItemHovered())

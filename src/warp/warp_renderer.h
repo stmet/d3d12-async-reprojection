@@ -71,10 +71,13 @@ struct WarpParams {
     // (intent-based, works through the ADS-in animation); these params replace nearDepthCut/maskDilate/
     // weaponDilate while ADS is active. Default = hip values; tune separately for your optics. ----
     bool  adsDetect     = true;    // auto-switch to the ADS profile while right-mouse (aim) is held
-    float adsCoverage   = 0.40f;   // ADS when near-field coverage of the center-lower region exceeds this
-    float adsCoverageNow = 0.0f;   // runtime readout of the measured center near-coverage (0..1)
+    bool  adsSuppress   = true;    // ADS: pause the warp entirely (present native). Kills the digital-optic
+                                   // ghost (a see-through sight is world-depth — depth-lock can't isolate
+                                   // it). Off = keep warping during ADS using the lock profile below.
     bool  adsForce      = false;   // force the ADS profile on (for tuning)
-    bool  adsActive     = false;   // runtime: set by the presenter (coverage detected or forced)
+    bool  adsActive     = false;   // runtime: set by the presenter (RMB held or forced)
+    float adsCoverage   = 0.40f;   // (unused — depth-coverage ADS detection retired)
+    float adsCoverageNow = 0.0f;   // (unused)
     float adsNearCut    = 0.95f;   // ADS near/far depth threshold
     float adsMaskDilate = 0.006f;  // ADS silhouette-edge mask dilation
     float adsWeaponDilate = 0.095f;// ADS optic-hole fill radius

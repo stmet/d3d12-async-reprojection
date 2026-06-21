@@ -26,7 +26,6 @@ ID3D12CommandQueue*        s_presentQueue = nullptr;   // real swapchain present
 ID3D12CommandQueue*        s_computeQueue = nullptr;   // dedicated async-compute queue for the warp
 ID3D12CommandQueue*        s_gameQueue    = nullptr;   // the game's own queue (fenced)
 IDXGISwapChain4*           s_real         = nullptr;
-bool                       s_backbufferUAV = false;    // real backbuffer created UAV-capable (compute warp)
 
 ID3D12Fence*               s_gameFence    = nullptr;   // signalled on s_gameQueue per game frame
 UINT64                     s_gameFenceVal = 0;
@@ -297,7 +296,7 @@ void PresenterThread() {
         // no export ring. Mode 4 (perspective rotational) needs no depth/MV; FOV is the manual value.
         float fovV = WarpRenderer::Params().fovDeg * 3.14159265f / 180.0f;
         bool warpedOnCompute = false;
-        if (s_params.asyncCompute && s_computeQueue && s_backbufferUAV) {
+        if (s_params.asyncCompute && s_computeQueue) {
             // Async-compute path: warp on the compute queue, then make the present queue wait on the
             // compute fence (GPU-side, no CPU stall) before the overlay + present run on it. This takes
             // the warp off the game's graphics submission so it isn't serialized behind the game frame.
@@ -500,7 +499,6 @@ void Start(IDXGISwapChain4* real, ID3D12CommandQueue* gameQueue, ID3D12Device* d
       if (SUCCEEDED(real->GetDesc1(&d))) {
           s_dispW = (float)d.Width; s_dispH = (float)d.Height;
           if (d.BufferCount >= 2) s_bufferCount = d.BufferCount;   // == the replacement-pool size
-          s_backbufferUAV = (d.BufferUsage & DXGI_USAGE_UNORDERED_ACCESS) != 0;
       } }
 
     // Dedicated async-compute queue for the warp (the decoupling fix). Request GLOBAL_REALTIME (the
@@ -520,8 +518,7 @@ void Start(IDXGISwapChain4* real, ID3D12CommandQueue* gameQueue, ID3D12Device* d
                 }
             }
         }
-        LOG_INFO("Presenter: compute queue 0x%p (priority=%s), backbufferUAV=%d",
-                 s_computeQueue, prio, s_backbufferUAV ? 1 : 0);
+        LOG_INFO("Presenter: compute queue 0x%p (priority=%s) — warp via scratch UAV + copy", s_computeQueue, prio);
     }
 
     if (!s_gameFence) {

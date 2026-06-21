@@ -201,19 +201,9 @@ HRESULT WINAPI HookManager::hkCreateSwapChain(IDXGIFactory* This, IUnknown* pDev
         if (ID3D12CommandQueue* pq = Presenter::EnsureQueue(device)) createDevice = pq;
     }
 
-    // Async-compute warp writes the REAL backbuffer via a UAV, so request UNORDERED_ACCESS usage.
-    DXGI_SWAP_CHAIN_DESC localDesc;
-    DXGI_SWAP_CHAIN_DESC* useDesc = pDesc;
-    if (Presenter::AsyncEnabled() && pDesc) {
-        localDesc = *pDesc;
-        localDesc.BufferUsage |= DXGI_USAGE_UNORDERED_ACCESS;
-        useDesc = &localDesc;
-    }
-    HRESULT hr = HookManager::Instance().o_CreateSwapChain(This, createDevice, useDesc, ppSwapChain);
-    if (FAILED(hr) && useDesc != pDesc) {
-        LOG_WARN("CreateSwapChain: UAV-usage create failed 0x%X — retrying without UAV (compute warp will fall back)", hr);
-        hr = HookManager::Instance().o_CreateSwapChain(This, createDevice, pDesc, ppSwapChain);
-    }
+    // Note: flip-model swapchains forbid DXGI_USAGE_UNORDERED_ACCESS, so the compute warp can't write
+    // the backbuffer directly — it warps into a scratch UAV and CopyResource's into the backbuffer.
+    HRESULT hr = HookManager::Instance().o_CreateSwapChain(This, createDevice, pDesc, ppSwapChain);
     if (SUCCEEDED(hr) && ppSwapChain && *ppSwapChain) {
         if (IDXGISwapChain4* proxy = TryWrapSwapChain(*ppSwapChain, device, queue)) {
             (*ppSwapChain)->Release();
@@ -241,19 +231,9 @@ HRESULT WINAPI HookManager::hkCreateSwapChainForHwnd(IDXGIFactory2* This, IUnkno
         if (ID3D12CommandQueue* pq = Presenter::EnsureQueue(device)) createDevice = pq;
     }
 
-    // Async-compute warp writes the REAL backbuffer via a UAV, so request UNORDERED_ACCESS usage.
-    DXGI_SWAP_CHAIN_DESC1 localDesc;
-    const DXGI_SWAP_CHAIN_DESC1* useDesc = pDesc;
-    if (Presenter::AsyncEnabled() && pDesc) {
-        localDesc = *pDesc;
-        localDesc.BufferUsage |= DXGI_USAGE_UNORDERED_ACCESS;
-        useDesc = &localDesc;
-    }
-    HRESULT hr = HookManager::Instance().o_CreateSwapChainForHwnd(This, createDevice, hWnd, useDesc, pFullscreenDesc, pRestrictToOutput, ppSwapChain);
-    if (FAILED(hr) && useDesc != pDesc) {
-        LOG_WARN("CreateSwapChainForHwnd: UAV-usage create failed 0x%X — retrying without UAV (compute warp will fall back)", hr);
-        hr = HookManager::Instance().o_CreateSwapChainForHwnd(This, createDevice, hWnd, pDesc, pFullscreenDesc, pRestrictToOutput, ppSwapChain);
-    }
+    // Note: flip-model swapchains forbid DXGI_USAGE_UNORDERED_ACCESS, so the compute warp can't write
+    // the backbuffer directly — it warps into a scratch UAV and CopyResource's into the backbuffer.
+    HRESULT hr = HookManager::Instance().o_CreateSwapChainForHwnd(This, createDevice, hWnd, pDesc, pFullscreenDesc, pRestrictToOutput, ppSwapChain);
     if (SUCCEEDED(hr) && ppSwapChain && *ppSwapChain) {
         if (IDXGISwapChain4* proxy = TryWrapSwapChain(*ppSwapChain, device, queue)) {
             (*ppSwapChain)->Release();

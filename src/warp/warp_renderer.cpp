@@ -59,6 +59,12 @@ ID3D12Resource*            s_cQReadback = nullptr;   // UINT64 * 2 * kFrames, pe
 UINT64*                    s_cQMapped  = nullptr;
 double                      s_cTsPeriodMs = 0.0;      // ms per timestamp tick (1000/freq)
 float                       s_lastWarpMs = 0.0f;
+// Flip-model backbuffers can't be UAVs, so the compute warp writes this scratch (ALLOW_UAV) texture
+// and then CopyResource's it into the backbuffer — both on the compute queue (copy states are legal
+// there), keeping the whole warp off the graphics submission path.
+ID3D12Resource*            s_cScratch  = nullptr;
+UINT                       s_cScratchW = 0, s_cScratchH = 0;
+DXGI_FORMAT                s_cScratchFmt = DXGI_FORMAT_UNKNOWN;
 
 const char* kWarpComputeShader =
 "Texture2D<float4>   gColor : register(t0);\n"
@@ -338,6 +344,7 @@ void ReleaseResources() {
     if (s_cFenceEvent) { CloseHandle(s_cFenceEvent); s_cFenceEvent = nullptr; }
     if (s_cQReadback){ if (s_cQMapped) { s_cQReadback->Unmap(0, nullptr); s_cQMapped = nullptr; } s_cQReadback->Release(); s_cQReadback = nullptr; }
     if (s_cQHeap)    { s_cQHeap->Release();    s_cQHeap = nullptr; }
+    if (s_cScratch)  { s_cScratch->Release();  s_cScratch = nullptr; s_cScratchW = s_cScratchH = 0; s_cScratchFmt = DXGI_FORMAT_UNKNOWN; }
     if (s_cHeap)     { s_cHeap->Release();     s_cHeap = nullptr; }
     if (s_cPso)      { s_cPso->Release();      s_cPso = nullptr; }
     if (s_cRoot)     { s_cRoot->Release();     s_cRoot = nullptr; }
@@ -1000,6 +1007,32 @@ bool WarpRenderer::WarpComputeInto(ID3D12CommandQueue* computeQueue,
     D3D12_RESOURCE_DESC dd = dest->GetDesc();
     UINT w = (UINT)dd.Width, h = dd.Height;
 
+    // Ensure the scratch UAV texture matches the backbuffer (the warp writes here, then we copy to the
+    // backbuffer — flip-model backbuffers can't be UAVs). Rebuilt on a resolution/format change.
+    if (!s_cScratch || s_cScratchW != w || s_cScratchH != h || s_cScratchFmt != s_fmt) {
+        if (s_cScratch) {
+            // drain any in-flight warp before swapping the resource out from under it
+            if (s_cFence && s_cFenceEvent && s_cFence->GetCompletedValue() < s_cFenceVal) {
+                s_cFence->SetEventOnCompletion(s_cFenceVal, s_cFenceEvent);
+                WaitForSingleObject(s_cFenceEvent, INFINITE);
+            }
+            s_cScratch->Release(); s_cScratch = nullptr;
+        }
+        D3D12_HEAP_PROPERTIES hp = {}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
+        D3D12_RESOURCE_DESC rd = {};
+        rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        rd.Width = w; rd.Height = h; rd.DepthOrArraySize = 1; rd.MipLevels = 1;
+        rd.Format = s_fmt; rd.SampleDesc.Count = 1;
+        rd.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        rd.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+        if (FAILED(s_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
+                D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&s_cScratch)))) {
+            LOG_ERROR("WarpCS: scratch UAV texture create failed (%ux%u fmt=%u)", w, h, (unsigned)s_fmt);
+            s_cFailed = true; return false;
+        }
+        s_cScratchW = w; s_cScratchH = h; s_cScratchFmt = s_fmt;
+    }
+
     // FOV geometry + late-latched camera term (identical angular model to ReprojectInto).
     float aspect   = h ? (float)w / (float)h : 1.777f;
     float tanHalfV = tanf((fovV > 0.01f ? fovV : 1.034f) * 0.5f);
@@ -1042,7 +1075,7 @@ bool WarpRenderer::WarpComputeInto(ID3D12CommandQueue* computeQueue,
         if (t1 > t0) s_lastWarpMs = (float)((double)(t1 - t0) * s_cTsPeriodMs);
     }
 
-    // [slot*2] = SRV color, [slot*2+1] = UAV dest.
+    // [slot*2] = SRV color, [slot*2+1] = UAV scratch (the warp target; copied to the backbuffer below).
     D3D12_CPU_DESCRIPTOR_HANDLE cpu = s_cHeap->GetCPUDescriptorHandleForHeapStart();
     D3D12_GPU_DESCRIPTOR_HANDLE gpu = s_cHeap->GetGPUDescriptorHandleForHeapStart();
     cpu.ptr += (SIZE_T)(slot * 2) * s_srvInc;
@@ -1055,14 +1088,15 @@ bool WarpRenderer::WarpComputeInto(ID3D12CommandQueue* computeQueue,
     D3D12_CPU_DESCRIPTOR_HANDLE uavCpu = cpu; uavCpu.ptr += s_srvInc;
     D3D12_UNORDERED_ACCESS_VIEW_DESC uav = {};
     uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D; uav.Format = s_fmt;
-    s_device->CreateUnorderedAccessView(dest, nullptr, &uav, uavCpu);
+    s_device->CreateUnorderedAccessView(s_cScratch, nullptr, &uav, uavCpu);
 
     s_cAlloc[slot]->Reset();
     s_cList->Reset(s_cAlloc[slot], s_cPso);
 
-    // Compute-queue-legal transitions only (COMMON<->UAV, COMMON<->NON_PIXEL_SHADER_RESOURCE).
-    Barrier(s_cList, dest,  destState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    Barrier(s_cList, color, srcState,  D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    // Compute-queue-legal transitions only (COMMON<->UAV / NPSR / COPY_*). Warp -> scratch (UAV),
+    // then copy scratch -> backbuffer.
+    Barrier(s_cList, s_cScratch, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    Barrier(s_cList, color,      srcState, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
     bool ts = (s_cQHeap != nullptr && s_cQReadback != nullptr);
     if (ts) s_cList->EndQuery(s_cQHeap, D3D12_QUERY_TYPE_TIMESTAMP, slot * 2);
@@ -1080,8 +1114,13 @@ bool WarpRenderer::WarpComputeInto(ID3D12CommandQueue* computeQueue,
                                   s_cQReadback, sizeof(UINT64) * slot * 2);
     }
 
-    Barrier(s_cList, color, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, srcState);
-    Barrier(s_cList, dest,  D3D12_RESOURCE_STATE_UNORDERED_ACCESS, destState);
+    // scratch UAV -> COPY_SOURCE ; backbuffer destState -> COPY_DEST ; copy ; restore states.
+    Barrier(s_cList, s_cScratch, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
+    Barrier(s_cList, dest,       destState, D3D12_RESOURCE_STATE_COPY_DEST);
+    s_cList->CopyResource(dest, s_cScratch);
+    Barrier(s_cList, dest,       D3D12_RESOURCE_STATE_COPY_DEST,   destState);
+    Barrier(s_cList, s_cScratch, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON);
+    Barrier(s_cList, color,      D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, srcState);
 
     s_cList->Close();
     ID3D12CommandList* lists[] = { s_cList };

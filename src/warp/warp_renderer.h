@@ -71,8 +71,11 @@ struct WarpParams {
     // data. maxWarpDeg caps the per-present rotation so the disoccluded band can't get huge on fast
     // flicks (the eye is motion-blurred then anyway); edgeFade softens whatever band remains to black
     // instead of smearing the clamped border pixel across it.
-    float maxWarpDeg    = 15.0f;   // clamp |yaw|,|pitch| per present (deg); bounds the smear on hard flicks
-    float edgeFade      = 0.04f;   // UV width to fade out-of-frame samples to black (0 = off / clamp smear)
+    // Both default OFF: the plain clamp-smear (no black margin, no magnitude cap) is what felt best.
+    // maxWarpDeg clamps yaw/pitch PER AXIS, which distorts diagonal/circular motion when it triggers —
+    // leave at 0 unless hard-flick smear specifically bothers you.
+    float maxWarpDeg    = 0.0f;    // 0 = uncapped; >0 clamps |yaw|,|pitch| per present (deg)
+    float edgeFade      = 0.0f;    // 0 = off (clamp smear); >0 = fade out-of-frame samples to black over this UV width
 
     // ---- HUD lock (region-based; flat UI has no usable depth) — superseded by the hud-less pivot,
     // kept as a fallback. Default off (the visible circle/rectangle looks worse than the swim). ----

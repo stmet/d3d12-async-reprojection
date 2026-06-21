@@ -328,8 +328,12 @@ void PresenterThread() {
         // ADS by depth profile: Cyberpunk doesn't change FOV on aim, but the gun/optic fills the
         // screen center-lower when aiming (hip-fire the center is distant world). Measure near-field
         // coverage of that region from the captured depth and switch to the ADS lock profile.
-        DepthCapture::ComputeNearCoverage(s_presentQueue, wpRt.nearDepthCut);
-        wpRt.adsCoverageNow = DepthCapture::GetNearCoverage();
+        if (wpRt.adsDetect || wpRt.adsForce) {
+            DepthCapture::ComputeNearCoverage(s_presentQueue, wpRt.nearDepthCut);
+            wpRt.adsCoverageNow = DepthCapture::GetNearCoverage();
+        } else {
+            wpRt.adsCoverageNow = 0.0f;
+        }
         wpRt.adsActive = wpRt.adsForce || (wpRt.adsDetect && wpRt.adsCoverageNow > wpRt.adsCoverage);
 
         float fovV = (wpRt.autoFov && fovSane) ? capFov : (wpRt.fovDeg * 3.14159265f / 180.0f);

@@ -70,7 +70,8 @@ struct WarpParams {
     // more of the screen, so the hip-fire lock settings ghost the sight. ADS is detected from hold-RMB
     // (intent-based, works through the ADS-in animation); these params replace nearDepthCut/maskDilate/
     // weaponDilate while ADS is active. Default = hip values; tune separately for your optics. ----
-    bool  adsDetect     = true;    // auto-switch to the ADS profile by depth profile (gun fills center)
+    bool  adsDetect     = false;   // auto-switch to the ADS profile by depth profile (gun fills center).
+                                   // Default OFF during coverage-compute bring-up; enable to test ADS.
     float adsCoverage   = 0.40f;   // ADS when near-field coverage of the center-lower region exceeds this
     float adsCoverageNow = 0.0f;   // runtime readout of the measured center near-coverage (0..1)
     bool  adsForce      = false;   // force the ADS profile on (for tuning)

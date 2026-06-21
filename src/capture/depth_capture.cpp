@@ -246,7 +246,7 @@ float                      s_coverage = 0.0f;
 
 const char* kCoverageCS =
 "Texture2D<float>      gDepth : register(t0);\n"
-"RWStructuredBuffer<uint> gOut : register(u0);\n"
+"RWByteAddressBuffer   gOut   : register(u0);\n"
 "SamplerState          gPt   : register(s0);\n"
 "cbuffer P : register(b0) { float gNearCut; float gX0; float gX1; float gY0; float gY1; uint gGX; uint gGY; uint gPad; };\n"
 "[numthreads(1,1,1)]\n"
@@ -257,22 +257,23 @@ const char* kCoverageCS =
 "          float2 uv = float2(gX0 + (x + 0.5f) / gGX * (gX1 - gX0), gY0 + (y + 0.5f) / gGY * (gY1 - gY0));\n"
 "          if (gDepth.SampleLevel(gPt, uv, 0) > gNearCut) ++n;\n"
 "      }\n"
-"    gOut[0] = n;\n"
+"    gOut.Store(0, n);\n"
 "}\n";
 
 bool BuildCoveragePipeline() {
     if (s_covInit) return true;
     if (s_covFailed || !s_device) return false;
 
-    D3D12_DESCRIPTOR_RANGE ranges[2] = {};
-    ranges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; ranges[0].NumDescriptors = 1; ranges[0].OffsetInDescriptorsFromTableStart = 0;
-    ranges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV; ranges[1].NumDescriptors = 1; ranges[1].OffsetInDescriptorsFromTableStart = 1;
-    D3D12_ROOT_PARAMETER p[2] = {};
-    p[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; p[0].DescriptorTable.NumDescriptorRanges = 2; p[0].DescriptorTable.pDescriptorRanges = ranges;
-    p[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS; p[1].Constants.ShaderRegister = 0; p[1].Constants.Num32BitValues = 8;
+    // Separate descriptor tables for SRV and UAV (most robust), each starting at its own bound handle.
+    D3D12_DESCRIPTOR_RANGE rSrv = {}; rSrv.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; rSrv.NumDescriptors = 1; rSrv.BaseShaderRegister = 0;
+    D3D12_DESCRIPTOR_RANGE rUav = {}; rUav.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV; rUav.NumDescriptors = 1; rUav.BaseShaderRegister = 0;
+    D3D12_ROOT_PARAMETER p[3] = {};
+    p[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; p[0].DescriptorTable.NumDescriptorRanges = 1; p[0].DescriptorTable.pDescriptorRanges = &rSrv;
+    p[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; p[1].DescriptorTable.NumDescriptorRanges = 1; p[1].DescriptorTable.pDescriptorRanges = &rUav;
+    p[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS; p[2].Constants.ShaderRegister = 0; p[2].Constants.Num32BitValues = 8;
     D3D12_STATIC_SAMPLER_DESC samp = {};
     samp.Filter = D3D12_FILTER_MIN_MAG_MIP_POINT; samp.AddressU = samp.AddressV = samp.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-    D3D12_ROOT_SIGNATURE_DESC rs = {}; rs.NumParameters = 2; rs.pParameters = p; rs.NumStaticSamplers = 1; rs.pStaticSamplers = &samp;
+    D3D12_ROOT_SIGNATURE_DESC rs = {}; rs.NumParameters = 3; rs.pParameters = p; rs.NumStaticSamplers = 1; rs.pStaticSamplers = &samp;
     ID3DBlob* sig = nullptr; ID3DBlob* err = nullptr;
     if (FAILED(D3D12SerializeRootSignature(&rs, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err))) { if (sig) sig->Release(); if (err) err->Release(); s_covFailed = true; return false; }
     HRESULT hr = s_device->CreateRootSignature(0, sig->GetBufferPointer(), sig->GetBufferSize(), IID_PPV_ARGS(&s_covRoot));
@@ -366,9 +367,10 @@ void ComputeNearCoverage(ID3D12CommandQueue* queue, float nearCut) {
     sv.Format = srvFmt; sv.Texture2D.MipLevels = 1;
     s_device->CreateShaderResourceView(depthTex, &sv, cpu);
     D3D12_CPU_DESCRIPTOR_HANDLE uavCpu = cpu; uavCpu.ptr += s_covInc;
+    D3D12_GPU_DESCRIPTOR_HANDLE uavGpu = gpu; uavGpu.ptr += s_covInc;
     D3D12_UNORDERED_ACCESS_VIEW_DESC uav = {};
-    uav.ViewDimension = D3D12_UAV_DIMENSION_BUFFER; uav.Format = DXGI_FORMAT_UNKNOWN;
-    uav.Buffer.NumElements = 1; uav.Buffer.StructureByteStride = sizeof(UINT);
+    uav.ViewDimension = D3D12_UAV_DIMENSION_BUFFER; uav.Format = DXGI_FORMAT_R32_TYPELESS;
+    uav.Buffer.FirstElement = 0; uav.Buffer.NumElements = 1; uav.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
     s_device->CreateUnorderedAccessView(s_covCount, nullptr, &uav, uavCpu);
 
     s_covAlloc[slot]->Reset();
@@ -377,10 +379,11 @@ void ComputeNearCoverage(ID3D12CommandQueue* queue, float nearCut) {
     s_covList->SetComputeRootSignature(s_covRoot);
     ID3D12DescriptorHeap* heaps[] = { s_covHeap };
     s_covList->SetDescriptorHeaps(1, heaps);
-    s_covList->SetComputeRootDescriptorTable(0, gpu);
+    s_covList->SetComputeRootDescriptorTable(0, gpu);      // SRV (depth)
+    s_covList->SetComputeRootDescriptorTable(1, uavGpu);   // UAV (count)
     struct { float nearCut, x0, x1, y0, y1; UINT gx, gy, pad; } c =
         { nearCut, 0.35f, 0.65f, 0.40f, 0.92f, kCovGridX, kCovGridY, 0 };
-    s_covList->SetComputeRoot32BitConstants(1, 8, &c, 0);
+    s_covList->SetComputeRoot32BitConstants(2, 8, &c, 0);
     s_covList->Dispatch(1, 1, 1);
     Barrier(s_covList, s_covCount, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
     s_covList->CopyBufferRegion(s_covReadback, (UINT64)slot * sizeof(UINT), s_covCount, 0, sizeof(UINT));

@@ -45,21 +45,68 @@ void HookFfxModule(HMODULE mod) {
     DetourAttach(&(PVOID&)o_ffxDispatch, hkffxDispatch);
     if (DetourTransactionCommit() == NO_ERROR) {
         s_ffxHooked = true;
-        LOG_INFO("DepthCapture: hooked ffxDispatch in 0x%p", mod);
+        LOG_INFO("DepthCapture: hooked ffxDispatch (FSR3.1 ffx-api) in 0x%p", mod);
     } else {
         o_ffxDispatch = nullptr;
         LOG_ERROR("DepthCapture: failed to detour ffxDispatch");
     }
 }
 
-// Late-hook the ffx-api DLL the instant the game loads it (it loads after us).
-bool IsFfxDll(const wchar_t* name) {
-    if (!name) return false;
-    // match "amd_fidelityfx_dx12" anywhere in the path, case-insensitive
+// ---- native FSR3 SDK dispatch detours (FSR 3.0 — Cyberpunk's path) ----
+typedef int (WINAPI* PFN_Fsr3Dispatch)(void*, const FfxFsr3DispatchDescription*);
+PFN_Fsr3Dispatch o_fsr3CtxDispatchUpscale  = nullptr;
+PFN_Fsr3Dispatch o_fsr3UpscalerCtxDispatch = nullptr;
+
+void HandleFsr3(const FfxFsr3DispatchDescription* d) {
+    if (!d) return;
+    Cam cam;
+    cam.nearZ = d->cameraNear; cam.farZ = d->cameraFar; cam.fovV = d->cameraFovAngleVertical;
+    cam.renderW = d->renderSize.width; cam.renderH = d->renderSize.height;
+    OnUpscaleDispatch((ID3D12Resource*)d->depth.resource,
+                      (ID3D12Resource*)d->motionVectors.resource,
+                      cam, (uint32_t)d->depth.state, (uint32_t)d->motionVectors.state);
+}
+
+int WINAPI hkFsr3CtxDispatchUpscale(void* ctx, const FfxFsr3DispatchDescription* d) {
+    HandleFsr3(d); return o_fsr3CtxDispatchUpscale(ctx, d);
+}
+int WINAPI hkFsr3UpscalerCtxDispatch(void* ctx, const FfxFsr3DispatchDescription* d) {
+    HandleFsr3(d); return o_fsr3UpscalerCtxDispatch(ctx, d);
+}
+
+void HookFsr3Module(HMODULE mod) {
+    if (!mod) return;
+    if (!o_fsr3CtxDispatchUpscale) {
+        if (auto p = (PFN_Fsr3Dispatch)GetProcAddress(mod, "ffxFsr3ContextDispatchUpscale")) {
+            o_fsr3CtxDispatchUpscale = p;
+            DetourTransactionBegin(); DetourUpdateThread(GetCurrentThread());
+            DetourAttach(&(PVOID&)o_fsr3CtxDispatchUpscale, hkFsr3CtxDispatchUpscale);
+            if (DetourTransactionCommit() == NO_ERROR)
+                LOG_INFO("DepthCapture: hooked ffxFsr3ContextDispatchUpscale (FSR3.0) in 0x%p", mod);
+            else o_fsr3CtxDispatchUpscale = nullptr;
+        }
+    }
+    if (!o_fsr3UpscalerCtxDispatch) {
+        if (auto p = (PFN_Fsr3Dispatch)GetProcAddress(mod, "ffxFsr3UpscalerContextDispatch")) {
+            o_fsr3UpscalerCtxDispatch = p;
+            DetourTransactionBegin(); DetourUpdateThread(GetCurrentThread());
+            DetourAttach(&(PVOID&)o_fsr3UpscalerCtxDispatch, hkFsr3UpscalerCtxDispatch);
+            if (DetourTransactionCommit() == NO_ERROR)
+                LOG_INFO("DepthCapture: hooked ffxFsr3UpscalerContextDispatch (FSR3.0) in 0x%p", mod);
+            else o_fsr3UpscalerCtxDispatch = nullptr;
+        }
+    }
+}
+
+// Late-hook the upscaler DLL the instant the game loads it (they load after us). Match by substring,
+// case-insensitive: "amd_fidelityfx_dx12" (FSR3.1 ffx-api) or "ffx_fsr3" (FSR3.0 native upscaler).
+void MaybeHook(const wchar_t* name, HMODULE m) {
+    if (!name || !m) return;
     wchar_t lower[MAX_PATH]; size_t n = 0;
     for (; name[n] && n < MAX_PATH - 1; ++n) lower[n] = (wchar_t)towlower(name[n]);
     lower[n] = 0;
-    return wcsstr(lower, L"amd_fidelityfx_dx12") != nullptr;
+    if (wcsstr(lower, L"amd_fidelityfx_dx12")) HookFfxModule(m);
+    if (wcsstr(lower, L"ffx_fsr3"))            HookFsr3Module(m);
 }
 
 typedef HMODULE (WINAPI* PFN_LLW)(LPCWSTR);
@@ -69,12 +116,12 @@ PFN_LLExW o_LoadLibraryExW = nullptr;
 
 HMODULE WINAPI hkLoadLibraryW(LPCWSTR name) {
     HMODULE m = o_LoadLibraryW(name);
-    if (m && IsFfxDll(name)) HookFfxModule(m);
+    MaybeHook(name, m);
     return m;
 }
 HMODULE WINAPI hkLoadLibraryExW(LPCWSTR name, HANDLE f, DWORD flags) {
     HMODULE m = o_LoadLibraryExW(name, f, flags);
-    if (m && IsFfxDll(name)) HookFfxModule(m);
+    MaybeHook(name, m);
     return m;
 }
 
@@ -118,9 +165,12 @@ void Install() {
         if (DetourTransactionCommit() != NO_ERROR)
             LOG_ERROR("DepthCapture: failed to detour LoadLibrary");
     }
-    // In case the ffx-api DLL is already loaded by the time we install.
+    // In case the upscaler DLLs are already loaded by the time we install.
     if (HMODULE m = GetModuleHandleW(L"amd_fidelityfx_dx12.dll")) HookFfxModule(m);
-    LOG_INFO("DepthCapture: installed (ffx-api depth/MV interception)");
+    const wchar_t* fsr3Dlls[] = { L"ffx_fsr3upscaler_x64.dll", L"ffx_fsr3_x64.dll",
+                                  L"ffx_fsr3_dx12_x64.dll", L"ffx_fsr3_dx12.dll" };
+    for (auto d : fsr3Dlls) if (HMODULE m = GetModuleHandleW(d)) HookFsr3Module(m);
+    LOG_INFO("DepthCapture: installed (FSR3.0 native + FSR3.1 ffx-api depth/MV interception)");
 }
 
 void Uninstall() {
@@ -129,6 +179,8 @@ void Uninstall() {
     if (o_LoadLibraryW)   DetourDetach(&(PVOID&)o_LoadLibraryW,   hkLoadLibraryW);
     if (o_LoadLibraryExW) DetourDetach(&(PVOID&)o_LoadLibraryExW, hkLoadLibraryExW);
     if (s_ffxHooked && o_ffxDispatch) DetourDetach(&(PVOID&)o_ffxDispatch, hkffxDispatch);
+    if (o_fsr3CtxDispatchUpscale)  DetourDetach(&(PVOID&)o_fsr3CtxDispatchUpscale, hkFsr3CtxDispatchUpscale);
+    if (o_fsr3UpscalerCtxDispatch) DetourDetach(&(PVOID&)o_fsr3UpscalerCtxDispatch, hkFsr3UpscalerCtxDispatch);
     DetourTransactionCommit();
     s_ffxHooked = false;
 }

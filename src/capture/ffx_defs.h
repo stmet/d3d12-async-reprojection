@@ -62,3 +62,55 @@ struct ffxDispatchDescUpscale {
     float                 viewSpaceToMetersFactor;
     uint32_t              flags;
 };
+
+// ============================================================================================
+// NATIVE FSR3 SDK path (FSR 3.0 — what Cyberpunk uses). Dispatched via ffxFsr3ContextDispatchUpscale
+// / ffxFsr3UpscalerContextDispatch in ffx_fsr3*_x64.dll, NOT the ffx-api. Layout verified against the
+// FidelityFX-SDK + the project's prior empirical fix: the three dilated* resources must be present and
+// there is NO upscaleSize, which aligns cameraNear/Far/Fov onto their real values for the 3.0 build.
+// Depth/MV are the leading fields and capture regardless of any tail misalignment. Do NOT reorder.
+// ============================================================================================
+struct FfxFloatCoords2D { float x; float y; };
+struct FfxDimensions2D  { unsigned int width; unsigned int height; };
+
+struct FfxResourceDescriptionFSR3 {
+    unsigned int type; unsigned int format;
+    union { unsigned int width;  unsigned int size;      };
+    union { unsigned int height; unsigned int stride;    };
+    union { unsigned int depth;  unsigned int alignment; };
+    unsigned int mipCount; unsigned int flags; unsigned int usage;
+};
+
+struct FfxResourceFSR3 {
+    void* resource;
+    FfxResourceDescriptionFSR3 description;
+    int   state;
+    wchar_t name[64];
+};
+
+struct FfxFsr3DispatchDescription {
+    void*           commandList;
+    FfxResourceFSR3 color;
+    FfxResourceFSR3 depth;
+    FfxResourceFSR3 motionVectors;
+    FfxResourceFSR3 exposure;
+    FfxResourceFSR3 reactive;
+    FfxResourceFSR3 transparencyAndComposition;
+    FfxResourceFSR3 dilatedDepth;
+    FfxResourceFSR3 dilatedMotionVectors;
+    FfxResourceFSR3 reconstructedPrevNearestDepth;
+    FfxResourceFSR3 output;
+    FfxFloatCoords2D jitterOffset;
+    FfxFloatCoords2D motionVectorScale;
+    FfxDimensions2D  renderSize;
+    bool  enableSharpening;
+    float sharpness;
+    float frameTimeDelta;
+    float preExposure;
+    bool  reset;
+    float cameraNear;
+    float cameraFar;
+    float cameraFovAngleVertical;
+    float viewSpaceToMetersFactor;
+    unsigned int flags;
+};

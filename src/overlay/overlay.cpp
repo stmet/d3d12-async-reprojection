@@ -317,24 +317,16 @@ void BuildUI() {
                                       "the gun. Raise to capture the optic display.");
 
                 ImGui::Spacing();
-                ImGui::Checkbox("ADS profile (auto by depth)", &wp.adsDetect);
+                ImGui::Checkbox("ADS profile (right-mouse)", &wp.adsDetect);
                 ImGui::SameLine();
                 ImGui::TextColored(wp.adsActive ? ImVec4(1.0f, 0.85f, 0.3f, 1.0f) : ImVec4(0.5f, 0.7f, 1.0f, 1.0f),
                                    wp.adsActive ? "[ADS]" : "[hip]");
                 ImGui::SameLine(); ImGui::TextDisabled("(?)");
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Cyberpunk doesn't change FOV on aim, but the gun/optic fills the screen\n"
-                                      "center-lower when aiming (hip-fire that area is distant world). Detects\n"
-                                      "ADS from the near-field coverage of that region — keybind-agnostic.\n"
-                                      "Swaps to the separate ADS lock profile below.");
-                ImGui::Text("  center near-coverage %.0f%%  (ADS if > %.0f%%)",
-                            wp.adsCoverageNow * 100.0f, wp.adsCoverage * 100.0f);
-                ImGui::SliderFloat("ADS coverage thresh", &wp.adsCoverage, 0.05f, 0.95f, "%.2f");
-                ImGui::SameLine(); ImGui::TextDisabled("(?)");
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("ADS triggers when the center-lower near-coverage exceeds this. Watch the\n"
-                                      "live %% above: note it at hip vs aimed, then set the threshold between\n"
-                                      "the two. Lower = easier to trigger.");
+                    ImGui::SetTooltip("While aiming (hold right-mouse) the optic needs a different lock profile.\n"
+                                      "FOV and depth-coverage can't detect ADS in this game (FOV is constant on\n"
+                                      "aim; the weapon stays offset and the optic renders at world depth), so\n"
+                                      "RMB is the reliable signal. Swaps to the ADS lock profile below.");
                 ImGui::Checkbox("force ADS (tuning)", &wp.adsForce);
                 ImGui::SameLine(); ImGui::TextDisabled("(?)");
                 if (ImGui::IsItemHovered())

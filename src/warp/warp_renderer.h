@@ -122,5 +122,24 @@ public:
                        ID3D12Resource* hud = nullptr, D3D12_RESOURCE_STATES hudState = D3D12_RESOURCE_STATE_PRESENT,
                        uint64_t frameSubmitQpc = 0);
 
+    // Async-compute warp (the VR-compositor decoupling): warp `color` (replacement backbuffer) into
+    // `dest` (the REAL backbuffer, which MUST be created with DXGI_USAGE_UNORDERED_ACCESS) on a
+    // dedicated COMPUTE queue, writing the destination via a UAV instead of a graphics RTV draw. This
+    // takes the warp off the game's direct-graphics submission path so the GPU scheduler can interleave
+    // it instead of serializing it behind the game's whole frame (which is what tied present rate to
+    // game rate). Records + executes on `computeQueue` and signals an internal fence; the caller must
+    // make its present queue Wait() on (*outFence, *outFenceValue) before presenting. Mode 4 / mode 0
+    // only (lean; no depth/mv/hud). Returns false if the compute pipeline can't init -> caller falls
+    // back to ReprojectInto on the graphics queue.
+    bool WarpComputeInto(ID3D12CommandQueue* computeQueue,
+                         ID3D12Resource* color, D3D12_RESOURCE_STATES srcState,
+                         ID3D12Resource* dest,  D3D12_RESOURCE_STATES destState,
+                         float fovV, uint64_t frameSubmitQpc,
+                         ID3D12Fence** outFence, UINT64* outFenceValue);
+
+    // Last measured warp GPU time (ms), from timestamp queries around the compute dispatch. 0 if
+    // unmeasured. Read by the presenter for telemetry (raw warp cost vs. contention diagnosis).
+    float LastWarpGpuMs() const;
+
     void Shutdown();
 };

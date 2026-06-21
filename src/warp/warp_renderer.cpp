@@ -40,6 +40,65 @@ ID3D12PipelineState*        s_rpPso    = nullptr;
 ID3D12DescriptorHeap*       s_rpSrvHeap = nullptr;  // kFrames * 3 SRVs (color, depth, mv per slot)
 bool                        s_rpFailed = false;
 
+// ---- async-compute warp pipeline (UAV write, runs on a dedicated compute queue) ----
+ID3D12RootSignature*        s_cRoot     = nullptr;
+ID3D12PipelineState*        s_cPso      = nullptr;
+ID3D12DescriptorHeap*       s_cHeap     = nullptr;   // kFrames * 2 (SRV color + UAV dest per slot)
+ID3D12CommandAllocator*     s_cAlloc[kFrames] = {};
+ID3D12GraphicsCommandList*  s_cList     = nullptr;   // recorded as a COMPUTE list
+ID3D12Fence*                s_cFence    = nullptr;   // signalled on the compute queue per warp
+HANDLE                      s_cFenceEvent = nullptr;
+UINT64                      s_cFenceVal = 0;
+UINT64                      s_cSlotFence[kFrames] = {};
+UINT                        s_cIdx      = 0;
+bool                        s_cInit     = false;
+bool                        s_cFailed   = false;
+// timestamp queries (2 per slot: start/end of the dispatch)
+ID3D12QueryHeap*            s_cQHeap    = nullptr;
+ID3D12Resource*            s_cQReadback = nullptr;   // UINT64 * 2 * kFrames, persistently mapped
+UINT64*                    s_cQMapped  = nullptr;
+double                      s_cTsPeriodMs = 0.0;      // ms per timestamp tick (1000/freq)
+float                       s_lastWarpMs = 0.0f;
+
+const char* kWarpComputeShader =
+"Texture2D<float4>   gColor : register(t0);\n"
+"RWTexture2D<float4> gOut   : register(u0);\n"
+"SamplerState        gLin   : register(s0);\n"
+"cbuffer P : register(b0) {\n"
+"    float2 gWarp;       // flat UV shift (mode 0)\n"
+"    uint   gMode;       // 0 = flat shift, 4 = perspective rotational\n"
+"    uint   gEnable;\n"
+"    float  gTanHalfV;   // tan(fovV/2)\n"
+"    float  gAspect;     // width/height\n"
+"    float  gYaw;        // fresh camera yaw delta (rad)\n"
+"    float  gPitch;      // fresh camera pitch delta (rad)\n"
+"    uint   gW;\n"
+"    uint   gH;\n"
+"};\n"
+"[numthreads(8,8,1)]\n"
+"void CSMain(uint3 id : SV_DispatchThreadID) {\n"
+"    if (id.x >= gW || id.y >= gH) return;\n"
+"    float2 uv = (float2(id.xy) + 0.5f) / float2(gW, gH);\n"
+"    float2 suv = uv;\n"
+"    if (gEnable != 0) {\n"
+"      if (gMode == 4) {\n"
+"        float th = gTanHalfV;\n"
+"        float tw = gTanHalfV * gAspect;\n"
+"        float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);\n"
+"        float3 d = float3(ndc.x * tw, ndc.y * th, 1.0f);\n"
+"        float cy = cos(gYaw),   sy = sin(gYaw);\n"
+"        float cp = cos(gPitch), sp = sin(gPitch);\n"
+"        float3 dp = float3(d.x, cp * d.y - sp * d.z, sp * d.y + cp * d.z);\n"
+"        float3 f  = float3(cy * dp.x + sy * dp.z, dp.y, -sy * dp.x + cy * dp.z);\n"
+"        if (f.z <= 1e-4f) { gOut[id.xy] = float4(0,0,0,1); return; }\n"
+"        suv = float2((f.x / f.z / tw + 1.0f) * 0.5f, (1.0f - f.y / f.z / th) * 0.5f);\n"
+"      } else {\n"
+"        suv = saturate(uv + gWarp);\n"
+"      }\n"
+"    }\n"
+"    gOut[id.xy] = gColor.SampleLevel(gLin, suv, 0);\n"
+"}\n";
+
 const char* kReprojectShader =
 "Texture2D    gColor : register(t0);\n"
 "Texture2D    gDepth : register(t1);\n"
@@ -271,6 +330,19 @@ void ReleaseResources() {
     if (s_rpPso)    { s_rpPso->Release();    s_rpPso = nullptr; }
     if (s_rpRoot)   { s_rpRoot->Release();   s_rpRoot = nullptr; }
     s_rpFailed = false;
+
+    // async-compute warp resources
+    for (UINT i = 0; i < kFrames; ++i) { if (s_cAlloc[i]) { s_cAlloc[i]->Release(); s_cAlloc[i] = nullptr; } }
+    if (s_cList)     { s_cList->Release();     s_cList = nullptr; }
+    if (s_cFence)    { s_cFence->Release();    s_cFence = nullptr; }
+    if (s_cFenceEvent) { CloseHandle(s_cFenceEvent); s_cFenceEvent = nullptr; }
+    if (s_cQReadback){ if (s_cQMapped) { s_cQReadback->Unmap(0, nullptr); s_cQMapped = nullptr; } s_cQReadback->Release(); s_cQReadback = nullptr; }
+    if (s_cQHeap)    { s_cQHeap->Release();    s_cQHeap = nullptr; }
+    if (s_cHeap)     { s_cHeap->Release();     s_cHeap = nullptr; }
+    if (s_cPso)      { s_cPso->Release();      s_cPso = nullptr; }
+    if (s_cRoot)     { s_cRoot->Release();     s_cRoot = nullptr; }
+    s_cInit = false; s_cFailed = false; s_cIdx = 0; s_cFenceVal = 0;
+    for (UINT i = 0; i < kFrames; ++i) s_cSlotFence[i] = 0;
 }
 
 bool BuildPipeline() {
@@ -497,6 +569,98 @@ bool BuildReprojectPipeline() {
         LOG_ERROR("Reproject: CreateDescriptorHeap failed"); s_rpFailed = true; return false;
     }
     LOG_INFO("Reproject: pipeline built (RTV fmt=%u)", (unsigned)s_fmt);
+    return true;
+}
+
+// Lazily build the async-compute warp pipeline + its compute command objects, descriptor heap,
+// fence and timestamp queries. dest gives the device + the backbuffer format (the UAV format). The
+// compute queue itself is owned by the presenter and only passed in at dispatch time.
+bool BuildComputePipeline(ID3D12Resource* dest) {
+    if (s_cInit) return true;
+    if (s_cFailed) return false;
+
+    if (!s_device) { if (FAILED(dest->GetDevice(IID_PPV_ARGS(&s_device)))) { s_cFailed = true; return false; } }
+    D3D12_RESOURCE_DESC dd = dest->GetDesc();
+    s_fmt = dd.Format;
+
+    // Root sig: one table [SRV t0 (color), UAV u0 (dest)] + 10 root constants (b0) + linear sampler.
+    D3D12_DESCRIPTOR_RANGE ranges[2] = {};
+    ranges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; ranges[0].NumDescriptors = 1; ranges[0].BaseShaderRegister = 0;
+    ranges[0].OffsetInDescriptorsFromTableStart = 0;
+    ranges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV; ranges[1].NumDescriptors = 1; ranges[1].BaseShaderRegister = 0;
+    ranges[1].OffsetInDescriptorsFromTableStart = 1;
+
+    D3D12_ROOT_PARAMETER params[2] = {};
+    params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    params[0].DescriptorTable.NumDescriptorRanges = 2;
+    params[0].DescriptorTable.pDescriptorRanges = ranges;
+    params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    params[1].Constants.ShaderRegister = 0;
+    params[1].Constants.Num32BitValues = 10;
+    params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    D3D12_STATIC_SAMPLER_DESC samp = {};
+    samp.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+    samp.AddressU = samp.AddressV = samp.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+
+    D3D12_ROOT_SIGNATURE_DESC rs = {};
+    rs.NumParameters = 2; rs.pParameters = params;
+    rs.NumStaticSamplers = 1; rs.pStaticSamplers = &samp;
+    rs.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+    ID3DBlob* sig = nullptr; ID3DBlob* err = nullptr;
+    if (FAILED(D3D12SerializeRootSignature(&rs, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err))) {
+        LOG_ERROR("WarpCS: SerializeRootSignature failed: %s", err ? (char*)err->GetBufferPointer() : "?");
+        if (sig) sig->Release(); if (err) err->Release(); s_cFailed = true; return false;
+    }
+    HRESULT hr = s_device->CreateRootSignature(0, sig->GetBufferPointer(), sig->GetBufferSize(), IID_PPV_ARGS(&s_cRoot));
+    sig->Release(); if (err) err->Release();
+    if (FAILED(hr)) { LOG_ERROR("WarpCS: CreateRootSignature failed 0x%X", hr); s_cFailed = true; return false; }
+
+    ID3DBlob* cs = nullptr; ID3DBlob* e1 = nullptr;
+    if (FAILED(D3DCompile(kWarpComputeShader, strlen(kWarpComputeShader), nullptr, nullptr, nullptr, "CSMain", "cs_5_0", 0, 0, &cs, &e1))) {
+        LOG_ERROR("WarpCS: compile failed: %s", e1 ? (char*)e1->GetBufferPointer() : "?");
+        if (cs) cs->Release(); if (e1) e1->Release(); s_cFailed = true; return false;
+    }
+    D3D12_COMPUTE_PIPELINE_STATE_DESC cp = {};
+    cp.pRootSignature = s_cRoot;
+    cp.CS = { cs->GetBufferPointer(), cs->GetBufferSize() };
+    hr = s_device->CreateComputePipelineState(&cp, IID_PPV_ARGS(&s_cPso));
+    cs->Release(); if (e1) e1->Release();
+    if (FAILED(hr)) { LOG_ERROR("WarpCS: CreateComputePipelineState failed 0x%X", hr); s_cFailed = true; return false; }
+
+    D3D12_DESCRIPTOR_HEAP_DESC sh = {};
+    sh.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    sh.NumDescriptors = kFrames * 2;            // SRV color + UAV dest per in-flight slot
+    sh.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    if (FAILED(s_device->CreateDescriptorHeap(&sh, IID_PPV_ARGS(&s_cHeap)))) { LOG_ERROR("WarpCS: heap failed"); s_cFailed = true; return false; }
+    if (!s_srvInc) s_srvInc = s_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+    for (UINT i = 0; i < kFrames; ++i)
+        if (FAILED(s_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_COMPUTE, IID_PPV_ARGS(&s_cAlloc[i])))) { LOG_ERROR("WarpCS: alloc failed"); s_cFailed = true; return false; }
+    if (FAILED(s_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_COMPUTE, s_cAlloc[0], nullptr, IID_PPV_ARGS(&s_cList)))) { LOG_ERROR("WarpCS: list failed"); s_cFailed = true; return false; }
+    s_cList->Close();
+    s_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&s_cFence));
+    s_cFenceEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+
+    // Timestamp queries (best-effort; warp still runs if these fail).
+    D3D12_QUERY_HEAP_DESC qh = {}; qh.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP; qh.Count = kFrames * 2;
+    if (SUCCEEDED(s_device->CreateQueryHeap(&qh, IID_PPV_ARGS(&s_cQHeap)))) {
+        D3D12_HEAP_PROPERTIES rb = {}; rb.Type = D3D12_HEAP_TYPE_READBACK;
+        D3D12_RESOURCE_DESC bd = {};
+        bd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER; bd.Width = sizeof(UINT64) * kFrames * 2;
+        bd.Height = 1; bd.DepthOrArraySize = 1; bd.MipLevels = 1; bd.SampleDesc.Count = 1;
+        bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        if (SUCCEEDED(s_device->CreateCommittedResource(&rb, D3D12_HEAP_FLAG_NONE, &bd,
+                D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&s_cQReadback)))) {
+            D3D12_RANGE none = { 0, 0 };
+            s_cQReadback->Map(0, &none, (void**)&s_cQMapped);
+        }
+    }
+
+    s_cInit = true;
+    LOG_INFO("WarpCS: async-compute warp pipeline built (%llux%u fmt=%u)", dd.Width, dd.Height, (unsigned)s_fmt);
     return true;
 }
 
@@ -820,6 +984,119 @@ void WarpRenderer::ReprojectInto(ID3D12CommandQueue* queue,
     s_frameIdx++;
 }
 
+bool WarpRenderer::WarpComputeInto(ID3D12CommandQueue* computeQueue,
+                                   ID3D12Resource* color, D3D12_RESOURCE_STATES srcState,
+                                   ID3D12Resource* dest,  D3D12_RESOURCE_STATES destState,
+                                   float fovV, uint64_t frameSubmitQpc,
+                                   ID3D12Fence** outFence, UINT64* outFenceValue) {
+    if (!computeQueue || !color || !dest) return false;
+    if (!BuildComputePipeline(dest)) return false;
+
+    if (s_cQHeap && s_cTsPeriodMs == 0.0) {
+        UINT64 freq = 0;
+        if (SUCCEEDED(computeQueue->GetTimestampFrequency(&freq)) && freq) s_cTsPeriodMs = 1000.0 / (double)freq;
+    }
+
+    D3D12_RESOURCE_DESC dd = dest->GetDesc();
+    UINT w = (UINT)dd.Width, h = dd.Height;
+
+    // FOV geometry + late-latched camera term (identical angular model to ReprojectInto).
+    float aspect   = h ? (float)w / (float)h : 1.777f;
+    float tanHalfV = tanf((fovV > 0.01f ? fovV : 1.034f) * 0.5f);
+    float tanHalfH = tanHalfV * aspect;
+    float warpU = 0.0f, warpV = 0.0f, yaw = 0.0f, pitch = 0.0f;
+    uint64_t now = MouseTracker::NowQpc();
+    if (s_params.enable) {
+        uint64_t base = WarpBaseQpc(frameSubmitQpc, now);
+        long long cx, cy, bx, by;
+        MouseTracker::GetAccAt(now, cx, cy);
+        MouseTracker::GetAccAt(base, bx, by);
+        long long dx = cx - bx, dy = cy - by;
+        if (s_params.angularGain) {
+            const float radPerCount = s_params.sensDegPer1000 * (3.14159265f / 180.0f) / 1000.0f;
+            yaw   = (float)dx * radPerCount * s_params.sign;
+            pitch = (float)dy * radPerCount * s_params.sign * s_params.pitchRatio;
+            warpU = (tanHalfH > 1e-5f) ? yaw   / (2.0f * tanHalfH) : 0.0f;
+            warpV = (tanHalfV > 1e-5f) ? pitch / (2.0f * tanHalfV) : 0.0f;
+        } else {
+            warpU = (float)dx * s_params.gain * s_params.sign / (float)w;
+            warpV = (float)dy * s_params.gain * s_params.sign / (float)h;
+            yaw   = 2.0f * tanHalfH * warpU;
+            pitch = 2.0f * tanHalfV * warpV;
+        }
+    }
+    s_lastPresentQpc = now;
+    s_params.lastU = warpU; s_params.lastV = warpV;
+
+    struct CSConsts { float warpU, warpV; UINT mode, enable; float tanHalfV, aspect, yaw, pitch; UINT w, h; }
+    consts = { warpU, warpV, (UINT)s_params.mode, s_params.enable ? 1u : 0u, tanHalfV, aspect, yaw, pitch, w, h };
+
+    UINT slot = s_cIdx % kFrames;
+    if (s_cFence->GetCompletedValue() < s_cSlotFence[slot]) {
+        s_cFence->SetEventOnCompletion(s_cSlotFence[slot], s_cFenceEvent);
+        WaitForSingleObject(s_cFenceEvent, INFINITE);
+    }
+    // This slot's previous dispatch is now complete -> its timestamp pair is readable.
+    if (s_cQMapped && s_cTsPeriodMs > 0.0 && s_cSlotFence[slot] != 0) {
+        UINT64 t0 = s_cQMapped[slot * 2], t1 = s_cQMapped[slot * 2 + 1];
+        if (t1 > t0) s_lastWarpMs = (float)((double)(t1 - t0) * s_cTsPeriodMs);
+    }
+
+    // [slot*2] = SRV color, [slot*2+1] = UAV dest.
+    D3D12_CPU_DESCRIPTOR_HANDLE cpu = s_cHeap->GetCPUDescriptorHandleForHeapStart();
+    D3D12_GPU_DESCRIPTOR_HANDLE gpu = s_cHeap->GetGPUDescriptorHandleForHeapStart();
+    cpu.ptr += (SIZE_T)(slot * 2) * s_srvInc;
+    gpu.ptr += (UINT64)(slot * 2) * s_srvInc;
+    D3D12_SHADER_RESOURCE_VIEW_DESC sv = {};
+    sv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    sv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    sv.Format = s_fmt; sv.Texture2D.MipLevels = 1;
+    s_device->CreateShaderResourceView(color, &sv, cpu);
+    D3D12_CPU_DESCRIPTOR_HANDLE uavCpu = cpu; uavCpu.ptr += s_srvInc;
+    D3D12_UNORDERED_ACCESS_VIEW_DESC uav = {};
+    uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D; uav.Format = s_fmt;
+    s_device->CreateUnorderedAccessView(dest, nullptr, &uav, uavCpu);
+
+    s_cAlloc[slot]->Reset();
+    s_cList->Reset(s_cAlloc[slot], s_cPso);
+
+    // Compute-queue-legal transitions only (COMMON<->UAV, COMMON<->NON_PIXEL_SHADER_RESOURCE).
+    Barrier(s_cList, dest,  destState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    Barrier(s_cList, color, srcState,  D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+
+    bool ts = (s_cQHeap != nullptr && s_cQReadback != nullptr);
+    if (ts) s_cList->EndQuery(s_cQHeap, D3D12_QUERY_TYPE_TIMESTAMP, slot * 2);
+
+    s_cList->SetComputeRootSignature(s_cRoot);
+    ID3D12DescriptorHeap* heaps[] = { s_cHeap };
+    s_cList->SetDescriptorHeaps(1, heaps);
+    s_cList->SetComputeRootDescriptorTable(0, gpu);
+    s_cList->SetComputeRoot32BitConstants(1, 10, &consts, 0);
+    s_cList->Dispatch((w + 7) / 8, (h + 7) / 8, 1);
+
+    if (ts) {
+        s_cList->EndQuery(s_cQHeap, D3D12_QUERY_TYPE_TIMESTAMP, slot * 2 + 1);
+        s_cList->ResolveQueryData(s_cQHeap, D3D12_QUERY_TYPE_TIMESTAMP, slot * 2, 2,
+                                  s_cQReadback, sizeof(UINT64) * slot * 2);
+    }
+
+    Barrier(s_cList, color, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, srcState);
+    Barrier(s_cList, dest,  D3D12_RESOURCE_STATE_UNORDERED_ACCESS, destState);
+
+    s_cList->Close();
+    ID3D12CommandList* lists[] = { s_cList };
+    computeQueue->ExecuteCommandLists(1, lists);
+    s_cSlotFence[slot] = ++s_cFenceVal;
+    computeQueue->Signal(s_cFence, s_cFenceVal);
+    s_cIdx++;
+
+    if (outFence)      *outFence = s_cFence;
+    if (outFenceValue) *outFenceValue = s_cFenceVal;
+    return true;
+}
+
+float WarpRenderer::LastWarpGpuMs() const { return s_lastWarpMs; }
+
 void WarpRenderer::Shutdown() {
     if (s_fence && s_fenceEvent) {
         s_fence->Signal(++s_fenceVal);
@@ -827,6 +1104,11 @@ void WarpRenderer::Shutdown() {
             s_fence->SetEventOnCompletion(s_fenceVal, s_fenceEvent);
             WaitForSingleObject(s_fenceEvent, INFINITE);
         }
+    }
+    // Drain any in-flight compute warp before tearing its objects down.
+    if (s_cFence && s_cFenceEvent && s_cFence->GetCompletedValue() < s_cFenceVal) {
+        s_cFence->SetEventOnCompletion(s_cFenceVal, s_cFenceEvent);
+        WaitForSingleObject(s_cFenceEvent, INFINITE);
     }
     ReleaseResources();
     if (s_device) { s_device->Release(); s_device = nullptr; }

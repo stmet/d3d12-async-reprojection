@@ -38,6 +38,11 @@ struct PresenterParams {
     bool  autoLead = true;      // closed-loop: drive leadMs to the knee (lowest latency, ~0 missed vblanks)
     float leadMs   = 2.5f;      // wake this long before the predicted vblank (must cover warp GPU time)
     float leadFloorMs = 0.3f;   // auto-lead never creeps below this (lower = chase latency harder, more slip risk)
+    // Async-compute warp: run the warp on a dedicated COMPUTE queue (UAV write) instead of the graphics
+    // queue, so the GPU scheduler interleaves it instead of serializing it behind the game's whole frame
+    // (which tied present rate to game rate). Needs a UAV-capable backbuffer; falls back to graphics if
+    // unavailable. The headline decoupling fix — keep on. Toggle for A/B against the graphics path.
+    bool  asyncCompute = true;
     // Frame-in-flight limiter: cap how far the game's CPU may run ahead of GPU completion. With our
     // non-blocking Present the game would otherwise race several frames ahead (GPU-bound), so the
     // freshest GPU-complete frame is stale -> the warp re-uses an old buffer (rubberbanding). Capping
@@ -58,6 +63,8 @@ struct PresenterParams {
     float gameAgeMs   = 0.0f;   // age of the game content being re-presented, at warp time
     float jitterMs    = 0.0f;   // worst present-interval deviation from the refresh in the window
     float gpuDepth    = 0.0f;   // game frames the CPU leads GPU completion by (pipeline depth)
+    float warpMs      = 0.0f;   // measured warp GPU time (timestamp queries; compute path) — raw cost
+    bool  computeActive = false;// true when the warp is running on the async-compute queue this session
     uint64_t presented = 0;     // total presenter presents
     uint64_t gameFrames = 0;    // total game frames submitted
     uint64_t missedVblanks = 0; // presents that slipped a refresh (lead too small / warp too slow)

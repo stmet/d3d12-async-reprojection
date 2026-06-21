@@ -29,17 +29,17 @@ void WriteRow(const char* kind, const char* event, const Sample& s, bool withMet
     char buf[1024];
     int n = snprintf(buf, sizeof(buf),
         "%.1f,%s,%s,"
-        "%d,%d,%d,%.4f,%.1f,%.5f,%+.0f,%d,%.2f,%d,%.3f,%.3f,%d,%d,%d,",
+        "%d,%d,%d,%.4f,%.1f,%.5f,%+.0f,%d,%.2f,%d,%.3f,%.3f,%d,%d,%d,%d,",
         NowMs(), kind, event ? event : "",
         s.enabled, s.mode, s.angular, s.sens, s.fov, s.gain, s.sign,
-        s.autoTrim, s.trimMs, s.autoLead, s.leadMs, s.leadFloorMs, s.maxFif, s.vsync, s.lateWarp);
+        s.autoTrim, s.trimMs, s.autoLead, s.leadMs, s.leadFloorMs, s.maxFif, s.vsync, s.lateWarp, s.asyncCompute);
     if (withMetrics) {
         n += snprintf(buf + n, sizeof(buf) - n,
-            "%.1f,%.1f,%.1f,%.3f,%.3f,%.3f,%llu,%.2f\n",
+            "%.1f,%.1f,%.1f,%.3f,%.3f,%.3f,%llu,%.2f,%.3f,%d\n",
             s.presentFps, s.gameFps, s.refreshHz, s.inputAgeMs, s.gameAgeMs, s.jitterMs,
-            (unsigned long long)s.missedVblanks, s.gpuDepth);
+            (unsigned long long)s.missedVblanks, s.gpuDepth, s.warpMs, s.compute);
     } else {
-        n += snprintf(buf + n, sizeof(buf) - n, ",,,,,,,\n");  // 8 empty metric columns
+        n += snprintf(buf + n, sizeof(buf) - n, ",,,,,,,,,\n");  // 10 empty metric columns
     }
     WriteRaw(buf, n);
 }
@@ -66,8 +66,8 @@ void Init(HMODULE dllModule) {
 
     const char* header =
         "t_ms,kind,event,"
-        "enabled,mode,angular,sens,fov,gain,sign,autotrim,trim_ms,autolead,lead_ms,lead_floor_ms,maxfif,vsync,latewarp,"
-        "present_fps,game_fps,refresh_hz,input_age_ms,game_age_ms,jitter_ms,missed_vblanks,gpu_depth\n";
+        "enabled,mode,angular,sens,fov,gain,sign,autotrim,trim_ms,autolead,lead_ms,lead_floor_ms,maxfif,vsync,latewarp,async_compute,"
+        "present_fps,game_fps,refresh_hz,input_age_ms,game_age_ms,jitter_ms,missed_vblanks,gpu_depth,warp_ms,compute\n";
     WriteRaw(header, (int)strlen(header));
 }
 

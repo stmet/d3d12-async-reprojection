@@ -39,7 +39,7 @@ function Med([double[]]$v) { return (Pct $v 50) }
 function ColD($name) { return @($stats | ForEach-Object { [double]$_.$name }) }
 
 # ---- config signature -> segments -------------------------------------------------------------
-$sigFields = 'enabled','mode','angular','sens','fov','gain','sign','autotrim','autolead','lead_floor_ms','maxfif','vsync','latewarp'
+$sigFields = 'enabled','mode','angular','sens','fov','gain','sign','autotrim','autolead','lead_floor_ms','maxfif','vsync','latewarp','async_compute'
 function Sig($r) { return ($sigFields | ForEach-Object { $r.$_ }) -join '|' }
 
 $segments = @()
@@ -75,6 +75,8 @@ foreach ($seg in $segments) {
     $pf = @($seg.Rows | ForEach-Object { [double]$_.present_fps })
     $gf = @($seg.Rows | ForEach-Object { [double]$_.game_fps })
     $gd = @($seg.Rows | ForEach-Object { [double]$_.gpu_depth })
+    $wm = @($seg.Rows | ForEach-Object { [double]$_.warp_ms })
+    $computeOn = (@($seg.Rows | Where-Object { $_.compute -eq '1' }).Count -gt ($seg.Rows.Count / 2))
     $rf = [double]$r0.refresh_hz
     $secs = $seg.Rows.Count    # ~1 window/sec
     $missDelta = [double]$seg.Rows[-1].missed_vblanks - [double]$seg.Rows[0].missed_vblanks
@@ -99,13 +101,14 @@ foreach ($seg in $segments) {
     $lw  = if ($r0.latewarp -eq '1') { "on" } else { "off" }
     $al  = if ($r0.autolead -eq '1') { "auto" } else { "manual" }
     $vs  = if ($r0.vsync -eq '1') { "on" } else { "off" }
+    $warpPath = if ($computeOn) { "COMPUTE" } else { "graphics" }
     $gainStr = if ($r0.angular -eq '1') { "angular sens={0} fov={1}" -f $r0.sens, $r0.fov } else { "uvgain={0}" -f $r0.gain }
 
     Write-Host ""
     Write-Host ("--- segment {0}  ({1:N0}s) ---" -f $idx, $secs) -ForegroundColor Cyan
-    Write-Host ("  warp={0} mode={1} {2} sign={3} | latewarp={4} lead={5}({6}) floor={7} maxfif={8} vsync={9}" -f `
-        $en, $r0.mode, $gainStr, $r0.sign, $lw, $al, ([math]::Round((Med (@($seg.Rows | ForEach-Object{[double]$_.lead_ms}))),2)), $r0.lead_floor_ms, $r0.maxfif, $vs)
-    Write-Host ("  present {0:N0} fps   game {1:N0} fps   refresh {2:N0} Hz" -f $pfMed, (Med $gf), $rf)
+    Write-Host ("  warp={0} [{1}] mode={2} {3} sign={4} | latewarp={5} lead={6}({7}) floor={8} maxfif={9} vsync={10}" -f `
+        $en, $warpPath, $r0.mode, $gainStr, $r0.sign, $lw, $al, ([math]::Round((Med (@($seg.Rows | ForEach-Object{[double]$_.lead_ms}))),2)), $r0.lead_floor_ms, $r0.maxfif, $vs)
+    Write-Host ("  present {0:N0} fps   game {1:N0} fps   refresh {2:N0} Hz   warpGPU {3:N3} ms" -f $pfMed, (Med $gf), $rf, (Med $wm))
     Write-Host ("  input->scanout : med {0,5:N2}  p99 {1,5:N2}  min {2,5:N2} ms" -f (Med $ia), (Pct $ia 99), (Pct $ia 1))
     Write-Host ("  game-frame age : med {0,5:N2}  p99 {1,5:N2} ms" -f (Med $ga), (Pct $ga 99))
     Write-Host ("  jitter         : med {0,5:N2}  p99 {1,5:N2} ms   missed {2:N1}/s   gpuDepth {3:N1}" -f (Med $ji), (Pct $ji 99), $missPerSec, (Med $gd))

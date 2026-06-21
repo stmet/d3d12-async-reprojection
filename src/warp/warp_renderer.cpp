@@ -584,12 +584,12 @@ void WarpRenderer::WarpInto(ID3D12CommandQueue* queue,
     if (!queue || !source || !dest) return;
     if (!EnsureInit(dest)) return;   // pipeline + heaps sized to the real backbuffer (dest)
 
-    // Late-latch the warp offset exactly like the in-place path. When the warp is disabled we emit a
-    // zero offset so the presenter still produces a clean resample (passthrough) — this is the
-    // plumbing-validation mode.
+    // Late-latch the warp offset exactly like the in-place path. When the warp is disabled (or
+    // suppressed because the game is in a cursor-free menu) we emit a zero offset so the presenter
+    // still produces a clean resample (passthrough).
     float warpU = 0.0f, warpV = 0.0f;
     uint64_t now = MouseTracker::NowQpc();
-    if (s_params.enable) {
+    if (s_params.enable && !s_params.runtimeSuppress) {
         uint64_t base = WarpBaseQpc(frameSubmitQpc, now);
         long long cx, cy, bx, by;
         MouseTracker::GetAccAt(now, cx, cy);
@@ -626,7 +626,7 @@ void WarpRenderer::WarpInto(ID3D12CommandQueue* queue,
     s_list->Reset(s_alloc[slot], s_pso);
 
     Barrier(s_list, dest,   destState, D3D12_RESOURCE_STATE_RENDER_TARGET);
-    Barrier(s_list, source, srcState,  D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    // source (the replacement buffer) is ALLOW_SIMULTANEOUS_ACCESS — read as an SRV from COMMON, no barrier.
 
     D3D12_VIEWPORT vp = { 0, 0, (float)s_w, (float)s_h, 0.0f, 1.0f };
     D3D12_RECT scr = { 0, 0, (LONG)s_w, (LONG)s_h };
@@ -641,7 +641,6 @@ void WarpRenderer::WarpInto(ID3D12CommandQueue* queue,
     s_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     s_list->DrawInstanced(3, 1, 0, 0);
 
-    Barrier(s_list, source, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, srcState);
     Barrier(s_list, dest,   D3D12_RESOURCE_STATE_RENDER_TARGET, destState);
 
     s_list->Close();
@@ -682,7 +681,8 @@ void WarpRenderer::ReprojectInto(ID3D12CommandQueue* queue,
     //    the center matches the uniform shift exactly while the edges curve. Used by modes 0/2/3 too.
     float warpU = 0.0f, warpV = 0.0f, yaw = 0.0f, pitch = 0.0f;
     uint64_t now = MouseTracker::NowQpc();
-    if (s_params.enable) {
+    bool effEnable = s_params.enable && !s_params.runtimeSuppress;
+    if (effEnable) {
         uint64_t base = WarpBaseQpc(frameSubmitQpc, now);
         long long cx, cy, bx, by;
         MouseTracker::GetAccAt(now, cx, cy);
@@ -733,7 +733,7 @@ void WarpRenderer::ReprojectInto(ID3D12CommandQueue* queue,
         s_params.depthEdgeThresh,
         s_params.depthEdge ? 1u : 0u,
         (UINT)s_params.mode,
-        s_params.enable ? 1u : 0u,
+        effEnable ? 1u : 0u,
         s_params.nearDepthCut, s_params.camRejectK,
         tanHalfV, aspect, yaw, pitch,
         (s_params.weaponLock && depth) ? 1u : 0u,  // only when real depth is bound
@@ -780,12 +780,9 @@ void WarpRenderer::ReprojectInto(ID3D12CommandQueue* queue,
     s_alloc[slot]->Reset();
     s_list->Reset(s_alloc[slot], s_rpPso);
 
-    bool isSharedScene = (hud != nullptr);
-
     Barrier(s_list, dest,  destState, D3D12_RESOURCE_STATE_RENDER_TARGET);
-    if (!isSharedScene) {
-        Barrier(s_list, color, srcState,  D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    }
+    // color (the replacement buffer) is ALLOW_SIMULTANEOUS_ACCESS: read as an SRV directly from COMMON,
+    // no transition barrier (and no cross-queue state-tracking conflict with the game's queue).
     if (hud && hud != color) {
         Barrier(s_list, hud, hudState, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     }
@@ -806,9 +803,6 @@ void WarpRenderer::ReprojectInto(ID3D12CommandQueue* queue,
 
     if (hud && hud != color) {
         Barrier(s_list, hud, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, hudState);
-    }
-    if (!isSharedScene) {
-        Barrier(s_list, color, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, srcState);
     }
     Barrier(s_list, dest,  D3D12_RESOURCE_STATE_RENDER_TARGET, destState);
 

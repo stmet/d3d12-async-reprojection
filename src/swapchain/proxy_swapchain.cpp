@@ -46,7 +46,11 @@ void ProxySwapChain::AllocReplacementBuffers() {
     rd.Width = d.Width; rd.Height = d.Height; rd.DepthOrArraySize = 1; rd.MipLevels = 1;
     rd.Format = d.Format; rd.SampleDesc.Count = 1;
     rd.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-    rd.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;  // game renders into these; we also SRV them
+    // ALLOW_RENDER_TARGET: the game renders into these. ALLOW_SIMULTANEOUS_ACCESS: the presenter's
+    // queue reads them as an SRV (the warp source) while they live in COMMON, with no state-transition
+    // barrier — which also removes the cross-queue state-tracking hazard of us transitioning a buffer
+    // the game's queue believes it owns. (Valid for single-sample color targets; no depth/MSAA here.)
+    rd.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET | D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS;
 
     for (UINT i = 0; i < m_bufferCount; ++i) {
         // COMMON == PRESENT (0): the game treats these as swapchain backbuffers and transitions
@@ -147,6 +151,13 @@ IDXGISwapChain4* TryWrapSwapChain(IUnknown* real, ID3D12Device* device, ID3D12Co
 
     if (GetEnvironmentVariableW(L"ASYNCREPROJ_NO_PROXY", nullptr, 0) != 0) {
         LOG_INFO("ProxySwapChain: disabled via ASYNCREPROJ_NO_PROXY — using real swapchain");
+        return nullptr;
+    }
+
+    // Only wrap D3D12 swapchains. A null device means the swapchain was created on a non-D3D12 device
+    // (e.g. a D3D11 game, or a D3D11on12 launcher/overlay): leave it untouched so we never crash it.
+    if (!device) {
+        LOG_INFO("ProxySwapChain: no D3D12 device on this swapchain — passing through untouched");
         return nullptr;
     }
 

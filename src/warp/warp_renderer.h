@@ -14,6 +14,12 @@
 // Tunables are exposed so the overlay menu can drive them live.
 struct WarpParams {
     bool  enable   = false;
+    // Menu detection: when the game releases its cursor clip (inventory/pause/dialogue/main menu), the
+    // camera isn't moving, so warping just makes the UI swim. menuDetect auto-suppresses the warp in
+    // those states (the presenter sets runtimeSuppress from the game's cursor-clip state each frame).
+    // Heuristic — toggle off if a game doesn't clip the cursor during gameplay.
+    bool  menuDetect      = true;
+    bool  runtimeSuppress = false;  // set by the presenter; warp behaves as disabled this frame when true
     int   mode     = 4;        // lean default: 4 = perspective rotational (the proven low-latency warp)
     float gain     = 0.0673f;  // mouse counts -> fraction of screen, per the v1 calibration
     float sign     = 1.0f;     // warp direction (flipped from -1: -1 sent the world the wrong way)

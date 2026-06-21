@@ -24,7 +24,12 @@ x64/
 # Except our copied Detours library
 !external/detours/detours.lib
 
-# Logs and temp files
+# Logs, telemetry and temp files
 *.log
 dxgi.log
+dxgi_telemetry.csv
 *.tmp
+
+# Local tooling / editor config
+.claude/
+.vscode/

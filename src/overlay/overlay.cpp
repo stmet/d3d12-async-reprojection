@@ -250,6 +250,17 @@ void BuildUI() {
         ImGui::SameLine();
         ImGui::Text("sign %+.0f    warp UV %.4f, %.4f", wp.sign, wp.lastU, wp.lastV);
 
+        ImGui::Checkbox("auto-suppress in menus", &wp.menuDetect);
+        ImGui::SameLine();
+        if (wp.menuDetect)
+            ImGui::TextColored(wp.runtimeSuppress ? ImVec4(1.0f, 0.7f, 0.2f, 1.0f) : ImVec4(0.4f, 1.0f, 0.5f, 1.0f),
+                               wp.runtimeSuppress ? "[MENU: warp off]" : "[gameplay]");
+        ImGui::SameLine(); ImGui::TextDisabled("(?)");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Detects menus/pause/inventory via the game's cursor-clip state and turns the\n"
+                              "warp off there (the camera isn't moving, so warping just swims the UI). Turn\n"
+                              "off if a game doesn't clip the cursor during normal gameplay.");
+
         if (wp.mode == 4) {
             ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.5f, 1.0f), "perspective rotational (fold-free, depth-independent)");
             ImGui::SliderFloat("vertical FOV (deg)", &wp.fovDeg, 30.0f, 110.0f, "%.0f");
@@ -464,6 +475,8 @@ void SetPresentQueue(ID3D12CommandQueue* queue) {
 }
 
 ID3D12CommandQueue* GetPresentQueue() { return s_queue; }
+
+bool GameHasCursorClip() { return s_haveClip; }
 
 void RenderOverlay(IDXGISwapChain* swapchain) {
     if (!EnsureInit(swapchain))

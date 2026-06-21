@@ -1,0 +1,19 @@
+# Normalize line endings: store LF in the repo, check out native on each platform.
+* text=auto
+
+# Source is LF.
+*.cpp   text eol=lf
+*.h     text eol=lf
+*.hlsl  text eol=lf
+*.md    text eol=lf
+*.txt   text eol=lf
+CMakeLists.txt text eol=lf
+
+# Scripts.
+*.ps1   text eol=crlf
+
+# Treat vendored binaries / libs as binary (no EOL munging, no diff).
+*.lib   binary
+*.dll   binary
+*.exp   binary
+*.pdb   binary

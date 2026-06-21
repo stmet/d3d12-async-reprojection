@@ -78,16 +78,36 @@ int64_t QueryRefreshQpc() {
     return MouseTracker::MsToQpc(1000.0 / 60.0);   // 60 Hz fallback
 }
 
-// Sleep until `targetQpc`: coarse Sleep for the bulk (needs timeBeginPeriod(1) for 1 ms granularity),
-// then spin the last ~1 ms so we wake within tens of microseconds of the target.
+// High-resolution waitable timer for the coarse sleep stage. CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+// (Win10 1803+) has far less wakeup jitter than ::Sleep's ~1 ms scheduler quantum, so we can pace
+// closer to the vblank with a smaller spin window. Falls back to a normal timer / ::Sleep if unavailable.
+HANDLE s_waitTimer = nullptr;
+
+// Sleep until `targetQpc`: high-res timer for the bulk, then spin the last ~0.3 ms so we wake within
+// tens of microseconds of the target (minimises both missed vblanks and excess input age).
 void SleepUntilQpc(uint64_t targetQpc) {
-    const int64_t oneMs = MouseTracker::MsToQpc(1.0);
+    if (!s_waitTimer) {
+        s_waitTimer = CreateWaitableTimerExW(nullptr, nullptr,
+                          CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+        if (!s_waitTimer) s_waitTimer = CreateWaitableTimerExW(nullptr, nullptr, 0, TIMER_ALL_ACCESS);
+    }
+    const int64_t spinMargin = MouseTracker::MsToQpc(0.3);   // spin the final 0.3 ms for precision
+    const double  ticksPerMs = (double)MouseTracker::MsToQpc(1.0);
     for (;;) {
         uint64_t now = MouseTracker::NowQpc();
         if (now >= targetQpc) return;
         int64_t rem = (int64_t)(targetQpc - now);
-        if (rem > 2 * oneMs) ::Sleep((DWORD)((rem - oneMs) / oneMs));
-        else _mm_pause();
+        if (rem > spinMargin && s_waitTimer) {
+            // Wait until (target - spinMargin). SetWaitableTimer takes 100 ns units, negative = relative.
+            double remMs = (double)(rem - spinMargin) / ticksPerMs;
+            LARGE_INTEGER due; due.QuadPart = -(LONGLONG)(remMs * 10000.0);
+            if (SetWaitableTimer(s_waitTimer, &due, 0, nullptr, nullptr, FALSE))
+                WaitForSingleObject(s_waitTimer, 50);
+            else
+                ::Sleep(0);
+        } else {
+            _mm_pause();
+        }
     }
 }
 
@@ -291,6 +311,11 @@ void PresenterThread() {
         // Re-warp the freshest GPU-complete game frame (the replacement buffer the game rendered into)
         // with freshly late-latched mouse input, DIRECTLY into the real backbuffer — no capture copies,
         // no export ring. Mode 4 (perspective rotational) needs no depth/MV; FOV is the manual value.
+        // Menu detection: suppress the warp (passthrough) when the game has released its cursor clip
+        // (menu/pause/inventory) — there's no camera motion to hide and warping would swim the UI.
+        WarpParams& wpRt = WarpRenderer::Params();
+        wpRt.runtimeSuppress = wpRt.menuDetect && !Overlay::GameHasCursorClip();
+
         float fovV = WarpRenderer::Params().fovDeg * 3.14159265f / 180.0f;
         WarpRenderer::Instance().ReprojectInto(s_presentQueue,
                                                frame, D3D12_RESOURCE_STATE_PRESENT,
@@ -591,6 +616,7 @@ void Shutdown() {
     if (s_drainFence) { s_drainFence->Release(); s_drainFence = nullptr; }
     if (s_drainEvent) { CloseHandle(s_drainEvent); s_drainEvent = nullptr; }
     if (s_limiterEvent) { CloseHandle(s_limiterEvent); s_limiterEvent = nullptr; }
+    if (s_waitTimer)    { CloseHandle(s_waitTimer);    s_waitTimer = nullptr; }
     if (s_presentQueue) { s_presentQueue->Release(); s_presentQueue = nullptr; }
 }
 

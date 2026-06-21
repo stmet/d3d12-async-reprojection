@@ -129,10 +129,29 @@ Ordered by expected impact.
 - [ ] A8. Shelve/remove the `adaptiveDelay` (dc) controller — still present, default off.
 
 ### Phase B — Latency validation & tuning
-- [ ] B1. Re-add the `RT:` telemetry (mode, gain, present/game fps, inputAge, gameAge, jitter, lead).
-- [ ] B2. Measure `gameAge`/`inputAge` vs the old build; confirm the direct-warp drop in `gameAge`.
-- [ ] B3. Tune ring size / `maxFramesInFlight`; push `leadMs` floor; confirm no missed-vblank climb.
-- [ ] B4. Add manual FOV; verify edge tracking under fast turns.
+- [x] B1. `RT:` telemetry present (mode, angular flag + sens, gain, sign, trim, fov, present/game fps, inputAge, gameAge, jitter, lead+floor, gpuDepth, fif).
+- [ ] B2. Measure `gameAge`/`inputAge` vs the old build; confirm the direct-warp drop in `gameAge`. *(needs a live run)*
+- [x] B3. `leadMs` floor is now a live `leadFloorMs` knob (auto-lead settles just above it); ring/`maxFramesInFlight` already exposed.
+- [x] B4. Manual FOV slider added (mode 4); set it to the game's current FOV (lower it when you ADS/zoom).
+
+### Phase B+ — The calibration model (the "ultra-optimized on-the-fly" design)
+The governing principle: **adapt TIMING closed-loop (invisible, tracks fps); compute MAGNITUDE
+open-loop from physics (exact, tracks FOV); never run a noisy closed loop on a parameter the eye
+can see** (that loop *is* the rubberband).
+
+- [x] **Angular gain model** (`angularGain`, default on, mode 4). `yaw = counts * (sensDegPer1000 deg/1000) * pi/180`,
+  fed straight to the perspective shader. One FOV-independent constant. The on-screen magnitude scales
+  with FOV automatically (zoom/ADS) via the projection — so "best gain per situation" is *computed*,
+  not searched, and there is **zero steady-state wander**. DPI is baked into the raw counts and cancels
+  (not a separate input). Replaces the deleted measure-the-slope auto-gain. Calibrate the one number
+  once by eye (flick at a vertical edge), then it's frozen.
+- [x] **Timing closed loops kept & sharpened.** `autoTrim` drives the late-latch window to a fixed
+  fraction of one game frame (tracks fps); `autoLead` hunts the vblank knee with a now-configurable
+  `leadFloorMs`. These are the legit on-the-fly latency optimizers — invisible, so closed-loop is safe.
+- [ ] **(optional) one-shot automated sens calibration.** Without MV capture the only reference left is
+  the image itself: compare `warp(frameN, mouseDelta)` to real `frameN+1` (static background) and 1-D
+  search `sensDegPer1000`, **converge then FREEZE**. Bigger GPU chunk (scratch RT + SSD reduction +
+  readback); deferred — the by-eye one-shot + analytic FOV already removes the per-situation problem.
 
 ### Phase C — Quality refinements (only if needed)
 - [ ] C1. Optional depth-only capture to restore mode-4 weapon-lock.

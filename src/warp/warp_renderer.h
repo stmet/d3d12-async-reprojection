@@ -26,6 +26,19 @@ struct WarpParams {
     bool  autoTrim  = true;    // presenter sets trimMs each stat window; manual slider hidden when on
     float trimScale = 0.5f;    // fraction of a game frame to lead by (0.5 = half-frame; lower = gentler)
 
+    // ---- angular gain model (lean default, mode 4): the FOV-correct mapping from mouse counts to
+    // camera rotation. yaw_radians = counts * (sensDegPer1000 deg / 1000 counts) * (pi/180). This
+    // constant is purely the game's mouse sensitivity (the game's yaw-per-count); DPI is already baked
+    // into the raw counts we read and is also baked into the counts the GAME reads, so it cancels — DPI
+    // is NOT a separate input. FOV is handled AUTOMATICALLY by the mode-4 perspective projection: a
+    // fixed deg/count produces a larger on-screen shift as the FOV narrows (ADS/zoom), which is exactly
+    // correct, so gain never needs re-tuning per situation. This replaces the old measure-the-slope
+    // auto-gain (which ran a noisy closed loop on a VISIBLE parameter -> the breathing/micro-rubberband).
+    // Calibrate this ONE number once (by eye), then it stays frozen. ----
+    bool  angularGain    = true;    // mode 4: use the deg/count model below instead of the flat UV `gain`
+    float sensDegPer1000 = 3.0f;    // camera yaw degrees per 1000 mouse counts (~matches the v1 gain @59 deg)
+    float pitchRatio     = 1.0f;    // vertical:horizontal sensitivity ratio (most FPS games = 1.0)
+
     // ---- gain auto-calibration: REMOVED in the lean build (no MV capture). Manual gain only. ----
     bool  autoCalibrate = false;  // kept for overlay compat; no effect (no calibration source)
     float calScale      = 0.8f;   // user trim on the applied auto-gain (auto-cal reads a touch strong)

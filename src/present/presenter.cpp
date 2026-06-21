@@ -316,13 +316,13 @@ void PresenterThread() {
             {
                 WarpParams& wp = WarpRenderer::Params();
                 double presentIntervalMs = s_params.presentFps > 1.0f ? 1000.0 / s_params.presentFps : 0.0;
-                LOG_INFO("RT: mode=%d en=%d gain=%.4f sign=%+.0f trim=%.1f mvScale=%.2f | present=%.0f game=%.0f refresh=%.0f (interval=%.1fms) | inputAge=%.1f gameAge=%.1f jitter=%.1f | lead=%.2f gpuDepth=%.1f fif=%d adapt=%d drain=%.2f grad=%.2f | warp=(%.4f,%.4f) mvFactor=%.2f uiThr=%.3f",
-                         wp.mode, wp.enable ? 1 : 0, wp.gain, wp.sign, wp.trimMs, wp.mvScale,
+                LOG_INFO("RT: mode=%d en=%d ang=%d sens=%.2f gain=%.4f sign=%+.0f trim=%.1f fov=%.0f | present=%.0f game=%.0f refresh=%.0f (interval=%.1fms) | inputAge=%.1f gameAge=%.1f jitter=%.1f | lead=%.2f(floor=%.2f) gpuDepth=%.1f fif=%d adapt=%d | warp=(%.4f,%.4f)",
+                         wp.mode, wp.enable ? 1 : 0, wp.angularGain ? 1 : 0, wp.sensDegPer1000, wp.gain, wp.sign, wp.trimMs, wp.fovDeg,
                          s_params.presentFps, s_params.gameFps, s_params.refreshHz, presentIntervalMs,
                          s_params.inputAgeMs, s_params.gameAgeMs, s_params.jitterMs,
-                         s_params.leadMs, s_params.gpuDepth, s_params.maxFramesInFlight,
-                         s_params.adaptiveDelay ? 1 : 0, s_params.drainMs, s_params.simGradient,
-                         wp.lastU, wp.lastV, wp.lastMvFactor, wp.uiThreshold);
+                         s_params.leadMs, s_params.leadFloorMs, s_params.gpuDepth, s_params.maxFramesInFlight,
+                         s_params.adaptiveDelay ? 1 : 0,
+                         wp.lastU, wp.lastV);
             }
 
             sumInputAge = sumGameAge = 0.0; worstJitter = 0;
@@ -351,7 +351,9 @@ void PresenterThread() {
                 float perMs     = (float)MouseTracker::MsToQpc(1.0);
                 float refreshMs = (s_refreshQpc > 0) ? (float)((double)s_refreshQpc / perMs) : 6.94f;
                 float maxLead   = refreshMs * 0.5f;
-                if (s_params.leadMs < 0.3f)    s_params.leadMs = 0.3f;
+                float floorMs   = s_params.leadFloorMs > 0.05f ? s_params.leadFloorMs : 0.05f;
+                if (floorMs > maxLead)         floorMs = maxLead;   // floor can't exceed the ceiling
+                if (s_params.leadMs < floorMs) s_params.leadMs = floorMs;
                 if (s_params.leadMs > maxLead) s_params.leadMs = maxLead;
                 missAtLastTune = s_params.missedVblanks;
                 lastTuneQpc = now;

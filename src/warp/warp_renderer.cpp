@@ -668,29 +668,43 @@ void WarpRenderer::ReprojectInto(ID3D12CommandQueue* queue,
     if (!EnsureInit(dest)) return;
     if (!BuildReprojectPipeline()) { WarpInto(queue, color, srcState, dest, destState, frameSubmitQpc); return; }
 
-    // Late-latch the rotational (camera) term exactly like WarpInto.
-    float warpU = 0.0f, warpV = 0.0f;
+    // FOV geometry first — the angular gain model needs it to back-fill the UV readout, and the shader
+    // needs it (gTanHalfV/gAspect) to reconstruct + rotate view rays. Use the manual FOV (mode 4 lean),
+    // falling back to ~59 deg vertical (1.034 rad) if it is unset.
+    float aspect    = s_h ? (float)s_w / (float)s_h : 1.777f;
+    float tanHalfV  = tanf((fovV > 0.01f ? fovV : 1.034f) * 0.5f);
+    float tanHalfH  = tanHalfV * aspect;
+
+    // Late-latch the camera term. Two models:
+    //  - ANGULAR (lean default): counts -> yaw/pitch in radians via sensDegPer1000. FOV-correct; the
+    //    on-screen shift falls out of the perspective projection below, automatically larger when zoomed.
+    //  - LEGACY UV: counts -> a flat UV shift via `gain` (FOV-agnostic), then convert to yaw/pitch so
+    //    the center matches the uniform shift exactly while the edges curve. Used by modes 0/2/3 too.
+    float warpU = 0.0f, warpV = 0.0f, yaw = 0.0f, pitch = 0.0f;
     uint64_t now = MouseTracker::NowQpc();
     if (s_params.enable) {
         uint64_t base = WarpBaseQpc(frameSubmitQpc, now);
         long long cx, cy, bx, by;
         MouseTracker::GetAccAt(now, cx, cy);
         MouseTracker::GetAccAt(base, bx, by);
-        warpU = (float)(cx - bx) * s_params.gain * s_params.sign / (float)s_w;
-        warpV = (float)(cy - by) * s_params.gain * s_params.sign / (float)s_h;
+        long long dx = cx - bx, dy = cy - by;
+        if (s_params.angularGain) {
+            const float radPerCount = s_params.sensDegPer1000 * (3.14159265f / 180.0f) / 1000.0f;
+            yaw   = (float)dx * radPerCount * s_params.sign;
+            pitch = (float)dy * radPerCount * s_params.sign * s_params.pitchRatio;
+            // Back-fill the center-equivalent UV shift for the HUD readout (lastU/lastV) and the
+            // modes-0/2/3 gWarp term. Inverse of the shader's yaw = 2*tanHalfH*warpU.
+            warpU = (tanHalfH > 1e-5f) ? yaw   / (2.0f * tanHalfH) : 0.0f;
+            warpV = (tanHalfV > 1e-5f) ? pitch / (2.0f * tanHalfV) : 0.0f;
+        } else {
+            warpU = (float)dx * s_params.gain * s_params.sign / (float)s_w;
+            warpV = (float)dy * s_params.gain * s_params.sign / (float)s_h;
+            yaw   = 2.0f * tanHalfH * warpU;
+            pitch = 2.0f * tanHalfV * warpV;
+        }
     }
     s_lastPresentQpc = now;
     s_params.lastU = warpU; s_params.lastV = warpV; s_params.lastMvFactor = mvFactor;
-
-    // Mode 4: turn the calibrated center UV shift into a true camera yaw/pitch and feed the FOV so the
-    // shader can reconstruct + rotate view rays. yaw = 2*tanHalfH*warpU makes the center match the old
-    // uniform shift exactly while the edges curve correctly. Use the captured FOV (reflects ADS zoom),
-    // falling back to ~59 deg vertical if the capture is missing.
-    float aspect    = s_h ? (float)s_w / (float)s_h : 1.777f;
-    float tanHalfV  = tanf((fovV > 0.01f ? fovV : 1.034f) * 0.5f);
-    float tanHalfH  = tanHalfV * aspect;
-    float yaw       = 2.0f * tanHalfH * warpU;
-    float pitch     = 2.0f * tanHalfV * warpV;
 
     struct RPConsts {
         float warpU, warpV;

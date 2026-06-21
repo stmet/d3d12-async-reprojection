@@ -209,22 +209,26 @@ void BuildUI() {
         int modeIdx = (wp.mode == 4) ? 1 : (wp.mode == 2 ? 2 : (wp.mode == 3 ? 3 : 0));
         if (ImGui::Combo("mode", &modeIdx, "Rotational shift\0Perspective rotational\0Hybrid (corner cancel)\0True reproject (per-pixel MV)\0"))
             wp.mode = (modeIdx == 1) ? 4 : (modeIdx == 2 ? 2 : (modeIdx == 3 ? 3 : 0));
-        ImGui::Checkbox("auto-calibrate gain", &wp.autoCalibrate);
-        if (wp.autoCalibrate) {
+        // ---- gain: angular model (FOV-correct deg/count, the lean default) vs legacy flat UV gain ----
+        ImGui::Checkbox("angular gain (FOV-correct deg/count)", &wp.angularGain);
+        ImGui::SameLine(); ImGui::TextDisabled("(?)");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Maps mouse counts to camera yaw/pitch in DEGREES, then lets the perspective\n"
+                              "projection turn that into the on-screen shift. The screen motion then scales\n"
+                              "AUTOMATICALLY with FOV (zoom/ADS) -- the sensitivity is ONE constant you set\n"
+                              "once and never re-tune per situation. DPI is baked into the raw counts and\n"
+                              "cancels, so it is NOT a separate input. This replaces the old measure-the-\n"
+                              "slope auto-gain (a noisy loop on a visible param -> the breathing/rubberband).\n"
+                              "Off = legacy flat UV gain (FOV-agnostic).");
+        if (wp.angularGain) {
+            ImGui::SliderFloat("sensitivity (deg/1000 counts)", &wp.sensDegPer1000, 0.5f, 12.0f, "%.2f");
             ImGui::SameLine(); ImGui::TextDisabled("(?)");
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Regresses the far-corner motion vector (pure camera screen motion)\n"
-                                  "against the mouse delta each frame to derive the warp gain.\n"
-                                  "Move the camera (mouse) to feed it. Magnitude only — sign stays manual.");
-            ImGui::Text("gain %.4f (auto)  measured %.4f  conf %.0f%%  n=%d",
-                        wp.gain, wp.calGain, wp.calConfidence * 100.0f, wp.calSamples);
-            // Strength trim: auto-cal tends to read a touch strong (the warp's fresh-delta window is
-            // wider than one game frame). Lower this if the warp over-shoots your aim.
-            ImGui::SliderFloat("auto-gain strength", &wp.calScale, 0.2f, 1.2f, "%.2f");
-            if (wp.detectedSign != 0.0f && wp.detectedSign != wp.sign)
-                ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f),
-                                   "detected sign %+.0f differs from yours %+.0f — try 'flip sign'",
-                                   wp.detectedSign, wp.sign);
+                ImGui::SetTooltip("The one FOV-independent constant. Calibrate ONCE by eye: aim at a sharp\n"
+                                  "vertical edge, flick left/right, and raise/lower this until the edge holds\n"
+                                  "still under the crosshair during the flick. Then leave it -- it never needs\n"
+                                  "to change with FOV/zoom/scene (that is handled automatically).");
+            ImGui::SliderFloat("vert:horiz ratio", &wp.pitchRatio, 0.5f, 1.5f, "%.2f");
         } else {
             ImGui::SliderFloat("gain", &wp.gain, 0.0f, 0.3f, "%.4f");
         }
@@ -246,6 +250,13 @@ void BuildUI() {
 
         if (wp.mode == 4) {
             ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.5f, 1.0f), "perspective rotational (fold-free, depth-independent)");
+            ImGui::SliderFloat("vertical FOV (deg)", &wp.fovDeg, 30.0f, 110.0f, "%.0f");
+            ImGui::SameLine(); ImGui::TextDisabled("(?)");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Manual vertical FOV for the perspective warp (the lean build has no FSR\n"
+                                  "dispatch capture to read it from). Set it to match the game's CURRENT FOV.\n"
+                                  "With angular gain on, this is what makes the warp magnitude correct: when\n"
+                                  "you zoom/ADS, lower this to match and the on-screen motion scales right.");
             ImGui::Checkbox("weapon lock (near-field stays put)", &wp.weaponLock);
             if (wp.weaponLock) {
                 ImGui::SameLine(); ImGui::TextDisabled("(?)");
@@ -338,6 +349,15 @@ void BuildUI() {
             ImGui::SameLine();
             if (pp.autoLead) ImGui::Text("vblank lead %.2f ms (auto)", pp.leadMs);
             else             ImGui::SliderFloat("vblank lead ms", &pp.leadMs, 0.5f, 8.0f, "%.2f");
+            if (pp.autoLead) {
+                ImGui::SliderFloat("lead floor ms", &pp.leadFloorMs, 0.1f, 3.0f, "%.2f");
+                ImGui::SameLine(); ImGui::TextDisabled("(?)");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Hard floor the auto-lead controller won't creep below. This is the\n"
+                                      "latency knob: lower it to chase input->photon down, raise it if\n"
+                                      "'missed vblanks' starts climbing. The controller settles just above\n"
+                                      "this once the warp's GPU cost fits.");
+            }
 
             ImGui::SliderInt("max frames in flight", &pp.maxFramesInFlight, 0, 4);
             ImGui::SameLine(); ImGui::TextDisabled("(?)");

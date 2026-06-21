@@ -37,6 +37,7 @@ struct PresenterParams {
     bool  lateWarp = true;
     bool  autoLead = true;      // closed-loop: drive leadMs to the knee (lowest latency, ~0 missed vblanks)
     float leadMs   = 2.5f;      // wake this long before the predicted vblank (must cover warp GPU time)
+    float leadFloorMs = 0.3f;   // auto-lead never creeps below this (lower = chase latency harder, more slip risk)
     // Frame-in-flight limiter: cap how far the game's CPU may run ahead of GPU completion. With our
     // non-blocking Present the game would otherwise race several frames ahead (GPU-bound), so the
     // freshest GPU-complete frame is stale -> the warp re-uses an old buffer (rubberbanding). Capping

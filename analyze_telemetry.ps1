@@ -85,12 +85,13 @@ foreach ($seg in $segments) {
     $lockRatio = if ($rf -gt 1) { $pfMed / $rf } else { 0 }
     $jitCap = if ($rf -gt 1) { 1000.0 / $rf * 0.5 } else { 5.0 }
     $ji99 = Pct $ji 99
-    # Break the phase-lock test into its specific failure reasons so the verdict is actionable.
+    # Phase-lock verdict gates on the RELIABLE signals: present rate vs refresh, and real dropped frames
+    # (expected-minus-actual presents). Jitter here is a CPU-timestamped worst-interval estimate that
+    # over-reports on thread descheduling, so it's shown as info only, not a hard SUSPECT trigger.
     $reasons = @()
     if ($lockRatio -lt 0.95) { $reasons += ("under-refresh ({0:N0}/{1:N0}fps={2:P0})" -f $pfMed, $rf, $lockRatio) }
     if ($lockRatio -gt 1.05) { $reasons += "over-refresh (vsync off?)" }
-    if ($missPerSec -ge 2.0) { $reasons += ("{0:N0} missed/s" -f $missPerSec) }
-    if ($ji99 -ge $jitCap)   { $reasons += ("jitter p99 {0:N1}>{1:N1}ms" -f $ji99, $jitCap) }
+    if ($missPerSec -ge 2.0) { $reasons += ("{0:N1} dropped/s" -f $missPerSec) }
     $phaseLocked = ($reasons.Count -eq 0)
     $verdict = if ($phaseLocked) { "TRUSTWORTHY" } else { "SUSPECT: " + ($reasons -join ", ") }
     $vColor  = if ($phaseLocked) { "Green" } else { "Yellow" }

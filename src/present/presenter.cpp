@@ -232,7 +232,7 @@ void PresenterThread() {
     double   sumInputAge = 0.0, sumGameAge = 0.0;   // QPC ticks, summed over the window
     int64_t  worstJitter = 0;                       // |interval - refresh|, max over the window
     uint64_t lastTuneQpc = lastStatQpc;             // adaptive-lead controller cadence
-    uint64_t missAtLastTune = s_params.missedVblanks;
+    uint64_t presentedAtLastTune = s_params.presented;  // for accurate per-tune drop count
     // Last GPU-complete game frame, kept resident so we can re-warp it without ever stalling on the
     // game queue (see the non-blocking frame selection below). Raw pointer — same lifetime contract as
     // s_latestFrame (the replacement-buffer pool outlives the brief window we hold it).
@@ -354,10 +354,10 @@ void PresenterThread() {
         uint64_t vbl = MouseTracker::NowQpc();
         if (s_lastVblankQpc && s_refreshQpc > 0) {
             int64_t dt = (int64_t)(vbl - s_lastVblankQpc);
-            // A present that took noticeably longer than one refresh slipped a vblank (lead too small
-            // or warp too slow). Meaningful with or without vsync — we self-pace to the refresh either
-            // way — so measure it in both modes.
-            if (dt > s_refreshQpc + s_refreshQpc / 2) s_params.missedVblanks++;
+            // Real dropped frames are counted accurately per stat window below (expected minus actual
+            // presents). This CPU-timestamped interval is NOT used for that anymore — it spikes whenever
+            // the thread is briefly descheduled (esp. in menus/at startup) and massively over-reports.
+            // Keep it only as an informational worst-interval ("jitter") indicator.
             int64_t jit = dt - s_refreshQpc; if (jit < 0) jit = -jit;
             if (jit > worstJitter) worstJitter = jit;
         }
@@ -380,6 +380,13 @@ void PresenterThread() {
             s_refreshQpc = QueryRefreshQpc();
             if (s_refreshQpc > 0)
                 s_params.refreshHz = (float)((double)MouseTracker::MsToQpc(1000.0) / (double)s_refreshQpc);
+            // Accurate dropped-frame count: expected presents (refresh x window) minus actual presents.
+            // present_fps == refresh therefore reads ~0 dropped, which is the truth — unlike the old
+            // per-interval CPU-timestamp test that over-reported tens/sec while present was locked.
+            if (s_params.refreshHz > 0.0f) {
+                long long dropped = (long long)((double)s_params.refreshHz * dt - (double)presentsInWindow + 0.5);
+                if (dropped > 0) s_params.missedVblanks += (uint64_t)dropped;
+            }
             double perMs = (double)MouseTracker::MsToQpc(1.0);
             if (presentsInWindow > 0) {
                 s_params.inputAgeMs = (float)(sumInputAge / presentsInWindow / perMs);
@@ -443,11 +450,16 @@ void PresenterThread() {
         // late-warp + vsync, where the lead governs how late we latch input.)
         if (s_params.autoLead && s_params.lateWarp) {
             if (now - lastTuneQpc >= (uint64_t)MouseTracker::MsToQpc(250.0)) {
-                uint64_t windowMisses = s_params.missedVblanks - missAtLastTune;
-                // Tolerate a few slips per window. Under FG the GPU is busy and the warp occasionally
-                // lands a hair late no matter the lead — reacting to every single miss just pins the
-                // lead at the cap. Only back off on SUSTAINED misses; otherwise keep creeping tighter.
-                const uint64_t kTolerable = 3;  // ~12 slips/sec acceptable; below visible judder w/ FG
+                // Real drops in this tune window = expected minus actual presents (accurate, no
+                // CPU-timestamp noise) so the controller stops backing off on phantom misses and can
+                // creep the lead down to the true knee.
+                double tuneSec = (double)(now - lastTuneQpc) / (double)MouseTracker::MsToQpc(1000.0);
+                long long miss = (s_params.refreshHz > 0.0f)
+                    ? (long long)((double)s_params.refreshHz * tuneSec - (double)(s_params.presented - presentedAtLastTune) + 0.5)
+                    : 0;
+                uint64_t windowMisses = miss > 0 ? (uint64_t)miss : 0;
+                // Tolerate a couple of real slips per window before backing off; otherwise creep tighter.
+                const uint64_t kTolerable = 2;
                 if (windowMisses > kTolerable) s_params.leadMs += 0.20f * (float)(windowMisses - kTolerable);
                 else                           s_params.leadMs -= 0.08f;  // creep tighter
                 // Hard ceiling at HALF the measured refresh. The warp budget == leadMs, and crossing a
@@ -461,7 +473,7 @@ void PresenterThread() {
                 if (floorMs > maxLead)         floorMs = maxLead;   // floor can't exceed the ceiling
                 if (s_params.leadMs < floorMs) s_params.leadMs = floorMs;
                 if (s_params.leadMs > maxLead) s_params.leadMs = maxLead;
-                missAtLastTune = s_params.missedVblanks;
+                presentedAtLastTune = s_params.presented;
                 lastTuneQpc = now;
             }
         }

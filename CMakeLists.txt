@@ -32,6 +32,9 @@ add_library(dxgi SHARED
     src/swapchain/proxy_swapchain.cpp
     src/input/mouse_tracker.h
     src/input/mouse_tracker.cpp
+    src/capture/ffx_defs.h
+    src/capture/depth_capture.h
+    src/capture/depth_capture.cpp
     src/warp/warp_renderer.h
     src/warp/warp_renderer.cpp
     src/present/presenter.h

@@ -3,6 +3,7 @@
 #include "../overlay/overlay.h"
 #include "../swapchain/proxy_swapchain.h"
 #include "../present/presenter.h"
+#include "../capture/depth_capture.h"
 #include <detours.h>
 
 HWND HookManager::s_gameHwnd = nullptr;
@@ -163,6 +164,7 @@ bool HookManager::InstallHooks() {
     if (err == NO_ERROR) {
         m_hooksInstalled = true;
         LOG_INFO("Detours: swapchain-create hooks attached (lean low-latency build).");
+        DepthCapture::Install();   // late-hook the FSR3.1 ffx-api for depth/MV interception
         return true;
     }
     LOG_ERROR("Detours: failed to commit hooks! Error code: %ld", err);
@@ -177,6 +179,7 @@ void HookManager::UninstallHooks() {
     if (o_CreateSwapChain) DetourDetach(&(PVOID&)o_CreateSwapChain, hkCreateSwapChain);
     if (o_CreateSwapChainForHwnd) DetourDetach(&(PVOID&)o_CreateSwapChainForHwnd, hkCreateSwapChainForHwnd);
     DetourTransactionCommit();
+    DepthCapture::Uninstall();
     m_hooksInstalled = false;
 
     // Stop the presenter thread before the process tears down its D3D objects.

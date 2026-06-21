@@ -476,7 +476,14 @@ void SetPresentQueue(ID3D12CommandQueue* queue) {
 
 ID3D12CommandQueue* GetPresentQueue() { return s_queue; }
 
-bool GameHasCursorClip() { return s_haveClip; }
+bool InGameMenu() {
+    // Our own tuning overlay forces the cursor visible — that's not a game menu; keep the warp running.
+    if (s_visible) return false;
+    // Gameplay hides the OS cursor (mouselook); menus/pause/inventory/dialogue show it.
+    CURSORINFO ci = { sizeof(CURSORINFO) };
+    if (GetCursorInfo(&ci)) return (ci.flags & CURSOR_SHOWING) != 0;
+    return false;
+}
 
 void RenderOverlay(IDXGISwapChain* swapchain) {
     if (!EnsureInit(swapchain))

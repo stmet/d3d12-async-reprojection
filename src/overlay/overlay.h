@@ -26,10 +26,11 @@ ID3D12CommandQueue* GetPresentQueue();
 // into the current back buffer.
 void RenderOverlay(IDXGISwapChain* swapchain);
 
-// True while the GAME has an active cursor clip — i.e. it's mouse-looking (gameplay). False when the
-// game has released the cursor (inventory/pause/dialogue/main menu). The presenter uses this to
-// auto-suppress the warp in menus. Reflects the game's own ClipCursor intent, not our overlay's.
-bool GameHasCursorClip();
+// True when the game appears to be in a MENU/pause (the OS cursor is visible) rather than mouse-looking
+// gameplay (cursor hidden). The presenter uses this to auto-suppress the warp where there's no camera
+// motion to hide. Returns false while our own tuning overlay is open (so the warp keeps running for
+// tuning). Heuristic — games hide the cursor during gameplay and show it in menus.
+bool InGameMenu();
 
 // Release ImGui + D3D12 objects and restore the window proc. Safe to call if never initialized.
 void Shutdown();

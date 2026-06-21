@@ -311,10 +311,10 @@ void PresenterThread() {
         // Re-warp the freshest GPU-complete game frame (the replacement buffer the game rendered into)
         // with freshly late-latched mouse input, DIRECTLY into the real backbuffer — no capture copies,
         // no export ring. Mode 4 (perspective rotational) needs no depth/MV; FOV is the manual value.
-        // Menu detection: suppress the warp (passthrough) when the game has released its cursor clip
-        // (menu/pause/inventory) — there's no camera motion to hide and warping would swim the UI.
+        // Menu detection: suppress the warp (passthrough) in menus/pause (OS cursor visible) — there's
+        // no camera motion to hide and warping would just swim the UI.
         WarpParams& wpRt = WarpRenderer::Params();
-        wpRt.runtimeSuppress = wpRt.menuDetect && !Overlay::GameHasCursorClip();
+        wpRt.runtimeSuppress = wpRt.menuDetect && Overlay::InGameMenu();
 
         float fovV = WarpRenderer::Params().fovDeg * 3.14159265f / 180.0f;
         WarpRenderer::Instance().ReprojectInto(s_presentQueue,

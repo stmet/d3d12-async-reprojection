@@ -386,8 +386,9 @@ bool EnsureInit(IDXGISwapChain* swapchain) {
     srvDesc.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     srvDesc.NumDescriptors = 64;
     srvDesc.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-    if (FAILED(s_device->CreateDescriptorHeap(&srvDesc, IID_PPV_ARGS(&s_srvHeap)))) {
-        LOG_ERROR("Overlay: CreateDescriptorHeap(SRV) failed");
+    if (HRESULT hr = s_device->CreateDescriptorHeap(&srvDesc, IID_PPV_ARGS(&s_srvHeap)); FAILED(hr)) {
+        LOG_ERROR("Overlay: CreateDescriptorHeap(SRV) failed hr=0x%08X deviceRemovedReason=0x%08X",
+                  (unsigned)hr, (unsigned)s_device->GetDeviceRemovedReason());
         s_initFailed = true;
         return false;
     }

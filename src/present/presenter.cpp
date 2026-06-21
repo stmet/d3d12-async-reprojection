@@ -324,6 +324,20 @@ void PresenterThread() {
         }
         bb->Release();
 
+        // Device-removal diagnostic: if the warp (esp. the compute path) faulted the GPU, capture the
+        // reason once instead of silently dying in the next D3D call.
+        if (s_device) {
+            HRESULT rr = s_device->GetDeviceRemovedReason();
+            if (rr != S_OK) {
+                static bool loggedRemoved = false;
+                if (!loggedRemoved) {
+                    loggedRemoved = true;
+                    LOG_ERROR("Presenter: DEVICE REMOVED after warp (computePath=%d warpGpu=%.3fms) reason=0x%08X",
+                              warpedOnCompute ? 1 : 0, WarpRenderer::Instance().LastWarpGpuMs(), (unsigned)rr);
+                }
+            }
+        }
+
         // Crisp (un-warped) menu on top of the warped frame.
         Overlay::RenderOverlay(s_real);
 

@@ -41,8 +41,9 @@ struct PresenterParams {
     // Async-compute warp: run the warp on a dedicated COMPUTE queue (UAV write) instead of the graphics
     // queue, so the GPU scheduler interleaves it instead of serializing it behind the game's whole frame
     // (which tied present rate to game rate). Needs a UAV-capable backbuffer; falls back to graphics if
-    // unavailable. The headline decoupling fix — keep on. Toggle for A/B against the graphics path.
-    bool  asyncCompute = true;
+    // unavailable. The headline decoupling fix. Default OFF during bring-up (a compute-path device
+    // removal is being diagnosed); toggle ON in the overlay to test it against the graphics path.
+    bool  asyncCompute = false;
     // Frame-in-flight limiter: cap how far the game's CPU may run ahead of GPU completion. With our
     // non-blocking Present the game would otherwise race several frames ahead (GPU-bound), so the
     // freshest GPU-complete frame is stale -> the warp re-uses an old buffer (rubberbanding). Capping

@@ -300,9 +300,11 @@ bool BuildCoveragePipeline() {
     if (FAILED(s_device->CreateCommittedResource(&rh, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&s_covReadback)))) { s_covFailed = true; return false; }
     D3D12_RANGE none = { 0, 0 }; s_covReadback->Map(0, &none, (void**)&s_covMapped);
 
+    // DIRECT type: this runs on the present (direct) queue, which cannot execute a COMPUTE-type list.
+    // A direct command list can still record compute dispatches.
     for (UINT i = 0; i < kCovRing; ++i)
-        if (FAILED(s_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_COMPUTE, IID_PPV_ARGS(&s_covAlloc[i])))) { s_covFailed = true; return false; }
-    if (FAILED(s_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_COMPUTE, s_covAlloc[0], nullptr, IID_PPV_ARGS(&s_covList)))) { s_covFailed = true; return false; }
+        if (FAILED(s_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&s_covAlloc[i])))) { s_covFailed = true; return false; }
+    if (FAILED(s_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, s_covAlloc[0], nullptr, IID_PPV_ARGS(&s_covList)))) { s_covFailed = true; return false; }
     s_covList->Close();
     s_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&s_covFence));
     s_covInit = true;

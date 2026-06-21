@@ -131,11 +131,21 @@ public:
     // make its present queue Wait() on (*outFence, *outFenceValue) before presenting. Mode 4 / mode 0
     // only (lean; no depth/mv/hud). Returns false if the compute pipeline can't init -> caller falls
     // back to ReprojectInto on the graphics queue.
+    // Step 1 (compute queue): warp `color` into an internal scratch UAV texture sized to `dest`. Does
+    // NOT touch the backbuffer (flip-model swapchains deny a non-owner queue write -> ACCESS_DENIED).
+    // Signals an internal fence; caller makes the present queue Wait() on it, then calls
+    // CopyScratchToBackbuffer on that (owning) queue to blit the result into the backbuffer.
     bool WarpComputeInto(ID3D12CommandQueue* computeQueue,
                          ID3D12Resource* color, D3D12_RESOURCE_STATES srcState,
                          ID3D12Resource* dest,  D3D12_RESOURCE_STATES destState,
                          float fovV, uint64_t frameSubmitQpc,
                          ID3D12Fence** outFence, UINT64* outFenceValue);
+
+    // Step 2 (the backbuffer's OWNING queue, i.e. the present queue): copy the scratch warp result into
+    // `dest`. Cheap blit; the expensive warp already ran concurrently on the compute queue. Caller must
+    // have queued a Wait() on the compute fence first. Returns false if there is no scratch yet.
+    bool CopyScratchToBackbuffer(ID3D12CommandQueue* gfxQueue,
+                                 ID3D12Resource* dest, D3D12_RESOURCE_STATES destState);
 
     // Last measured warp GPU time (ms), from timestamp queries around the compute dispatch. 0 if
     // unmeasured. Read by the presenter for telemetry (raw warp cost vs. contention diagnosis).

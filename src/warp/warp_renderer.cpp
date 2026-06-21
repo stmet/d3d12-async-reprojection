@@ -1093,8 +1093,10 @@ bool WarpRenderer::WarpComputeInto(ID3D12CommandQueue* computeQueue,
     s_cAlloc[slot]->Reset();
     s_cList->Reset(s_cAlloc[slot], s_cPso);
 
-    // Compute-queue-legal transitions only (COMMON<->UAV / NPSR / COPY_*). Warp -> scratch (UAV),
-    // then copy scratch -> backbuffer.
+    // Warp -> scratch (UAV) only. The backbuffer is NOT touched here: a flip-model swapchain denies a
+    // non-owner queue write (ACCESS_DENIED -> device removed). The present (owning) queue copies the
+    // scratch into the backbuffer afterwards via CopyScratchToBackbuffer. Compute-queue-legal states
+    // only (COMMON<->UAV / NON_PIXEL_SHADER_RESOURCE); scratch is left in COMMON for that copy to read.
     Barrier(s_cList, s_cScratch, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     Barrier(s_cList, color,      srcState, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
@@ -1114,12 +1116,7 @@ bool WarpRenderer::WarpComputeInto(ID3D12CommandQueue* computeQueue,
                                   s_cQReadback, sizeof(UINT64) * slot * 2);
     }
 
-    // scratch UAV -> COPY_SOURCE ; backbuffer destState -> COPY_DEST ; copy ; restore states.
-    Barrier(s_cList, s_cScratch, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
-    Barrier(s_cList, dest,       destState, D3D12_RESOURCE_STATE_COPY_DEST);
-    s_cList->CopyResource(dest, s_cScratch);
-    Barrier(s_cList, dest,       D3D12_RESOURCE_STATE_COPY_DEST,   destState);
-    Barrier(s_cList, s_cScratch, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON);
+    Barrier(s_cList, s_cScratch, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COMMON);
     Barrier(s_cList, color,      D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, srcState);
 
     s_cList->Close();
@@ -1131,6 +1128,36 @@ bool WarpRenderer::WarpComputeInto(ID3D12CommandQueue* computeQueue,
 
     if (outFence)      *outFence = s_cFence;
     if (outFenceValue) *outFenceValue = s_cFenceVal;
+    return true;
+}
+
+bool WarpRenderer::CopyScratchToBackbuffer(ID3D12CommandQueue* gfxQueue,
+                                           ID3D12Resource* dest, D3D12_RESOURCE_STATES destState) {
+    if (!gfxQueue || !dest || !s_cScratch) return false;
+    if (!EnsureInit(dest)) return false;   // builds the graphics command list/alloc/fence (reused here)
+
+    UINT slot = s_frameIdx % kFrames;
+    if (s_fence->GetCompletedValue() < s_frameFence[slot]) {
+        s_fence->SetEventOnCompletion(s_frameFence[slot], s_fenceEvent);
+        WaitForSingleObject(s_fenceEvent, INFINITE);
+    }
+    s_alloc[slot]->Reset();
+    s_list->Reset(s_alloc[slot], nullptr);   // copy needs no PSO
+
+    // The backbuffer is written by its OWNING (present) queue here, so the copy is allowed. scratch was
+    // left in COMMON by the compute warp (caller already queued a Wait on the compute fence).
+    Barrier(s_list, s_cScratch, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_SOURCE);
+    Barrier(s_list, dest,       destState, D3D12_RESOURCE_STATE_COPY_DEST);
+    s_list->CopyResource(dest, s_cScratch);
+    Barrier(s_list, dest,       D3D12_RESOURCE_STATE_COPY_DEST,   destState);
+    Barrier(s_list, s_cScratch, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON);
+
+    s_list->Close();
+    ID3D12CommandList* lists[] = { s_list };
+    gfxQueue->ExecuteCommandLists(1, lists);
+    s_frameFence[slot] = ++s_fenceVal;
+    gfxQueue->Signal(s_fence, s_fenceVal);
+    s_frameIdx++;
     return true;
 }
 

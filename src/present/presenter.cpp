@@ -305,9 +305,13 @@ void PresenterThread() {
                                                          frame, D3D12_RESOURCE_STATE_PRESENT,
                                                          bb,    D3D12_RESOURCE_STATE_PRESENT,
                                                          fovV, submitQpc, &wf, &wv) && wf) {
+                // Compute produced the warp into scratch; gate the present queue on it, then copy scratch
+                // -> backbuffer on the present queue (the backbuffer's owner — a compute write is denied).
                 s_presentQueue->Wait(wf, wv);
-                warpedOnCompute = true;
-                s_params.computeActive = true;
+                if (WarpRenderer::Instance().CopyScratchToBackbuffer(s_presentQueue, bb, D3D12_RESOURCE_STATE_PRESENT)) {
+                    warpedOnCompute = true;
+                    s_params.computeActive = true;
+                }
             }
         }
         if (!warpedOnCompute) {

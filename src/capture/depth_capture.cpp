@@ -13,6 +13,81 @@ ID3D12Resource*   s_mv    = nullptr;
 Cam               s_cam;
 bool              s_have  = false;
 
+// ---- depth copy (our own stable, simultaneous-access texture the warp samples) ----
+ID3D12Device*     s_device   = nullptr;
+ID3D12Resource*   s_depthCopy = nullptr;
+UINT              s_copyW = 0, s_copyH = 0;
+DXGI_FORMAT       s_copyFmt = DXGI_FORMAT_UNKNOWN;   // texture format (typeless family)
+DXGI_FORMAT       s_srvFmt  = DXGI_FORMAT_UNKNOWN;   // SRV view format
+ID3D12Resource*   s_lastCopiedDepth = nullptr;       // dedup: both hooks may pass the same depth/frame
+
+// FFX native FfxResourceStates (bit flags) -> D3D12 states (for transitioning the game's depth).
+D3D12_RESOURCE_STATES FfxStateToD3D12(uint32_t s) {
+    D3D12_RESOURCE_STATES d = (D3D12_RESOURCE_STATES)0;
+    if (s & 0x02) d |= D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    if (s & 0x04) d |= D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    if (s & 0x08) d |= D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    if (s & 0x10) d |= D3D12_RESOURCE_STATE_COPY_SOURCE;
+    if (s & 0x20) d |= D3D12_RESOURCE_STATE_COPY_DEST;
+    if (s & 0x100) d |= D3D12_RESOURCE_STATE_RENDER_TARGET;
+    if (s & 0x200) d |= D3D12_RESOURCE_STATE_DEPTH_WRITE;
+    return d ? d : D3D12_RESOURCE_STATE_COMMON;
+}
+
+void PickDepthFormats(DXGI_FORMAT f, DXGI_FORMAT* tex, DXGI_FORMAT* srv) {
+    switch (f) {
+        case DXGI_FORMAT_D32_FLOAT: case DXGI_FORMAT_R32_TYPELESS: case DXGI_FORMAT_R32_FLOAT:
+            *tex = DXGI_FORMAT_R32_TYPELESS; *srv = DXGI_FORMAT_R32_FLOAT; break;
+        case DXGI_FORMAT_D24_UNORM_S8_UINT: case DXGI_FORMAT_R24G8_TYPELESS:
+            *tex = DXGI_FORMAT_R24G8_TYPELESS; *srv = DXGI_FORMAT_R24_UNORM_X8_TYPELESS; break;
+        case DXGI_FORMAT_D16_UNORM: case DXGI_FORMAT_R16_TYPELESS:
+            *tex = DXGI_FORMAT_R16_TYPELESS; *srv = DXGI_FORMAT_R16_UNORM; break;
+        default: *tex = f; *srv = f; break;
+    }
+}
+
+inline void Barrier(ID3D12GraphicsCommandList* cl, ID3D12Resource* r,
+                    D3D12_RESOURCE_STATES a, D3D12_RESOURCE_STATES b) {
+    if (a == b) return;
+    D3D12_RESOURCE_BARRIER br = {};
+    br.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    br.Transition.pResource = r; br.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    br.Transition.StateBefore = a; br.Transition.StateAfter = b;
+    cl->ResourceBarrier(1, &br);
+}
+
+// Record a copy of the game's depth into our simultaneous-access texture onto the game's OWN command
+// list, while the depth is still in its FSR-input state (ffxState). Lazily (re)creates the texture.
+void RecordDepthCopy(ID3D12GraphicsCommandList* cl, ID3D12Resource* depth, uint32_t ffxState) {
+    if (!cl || !depth) return;
+    if (!s_device && FAILED(depth->GetDevice(IID_PPV_ARGS(&s_device)))) return;
+    D3D12_RESOURCE_DESC dd = depth->GetDesc();
+    DXGI_FORMAT texFmt, srvFmt; PickDepthFormats(dd.Format, &texFmt, &srvFmt);
+    if (!s_depthCopy || s_copyW != (UINT)dd.Width || s_copyH != dd.Height || s_copyFmt != texFmt) {
+        if (s_depthCopy) { s_depthCopy->Release(); s_depthCopy = nullptr; }
+        D3D12_HEAP_PROPERTIES hp = {}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
+        D3D12_RESOURCE_DESC rd = {};
+        rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        rd.Width = dd.Width; rd.Height = dd.Height; rd.DepthOrArraySize = 1; rd.MipLevels = 1;
+        rd.Format = texFmt; rd.SampleDesc.Count = 1; rd.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        rd.Flags = D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS;
+        if (FAILED(s_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
+                D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&s_depthCopy)))) {
+            LOG_ERROR("DepthCapture: failed to create depth-copy tex %llux%u fmt=%u", (unsigned long long)dd.Width, dd.Height, (unsigned)texFmt);
+            return;
+        }
+        s_copyW = (UINT)dd.Width; s_copyH = dd.Height; s_copyFmt = texFmt;
+        { std::lock_guard<std::mutex> lk(s_mtx); s_srvFmt = srvFmt; }
+        LOG_INFO("DepthCapture: depth-copy texture %ux%u texFmt=%u srvFmt=%u", s_copyW, s_copyH, (unsigned)texFmt, (unsigned)srvFmt);
+    }
+    D3D12_RESOURCE_STATES src = FfxStateToD3D12(ffxState);
+    Barrier(cl, depth, src, D3D12_RESOURCE_STATE_COPY_SOURCE);
+    Barrier(cl, s_depthCopy, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_DEST);
+    cl->CopyResource(s_depthCopy, depth);
+    Barrier(cl, s_depthCopy, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COMMON);
+    Barrier(cl, depth, D3D12_RESOURCE_STATE_COPY_SOURCE, src);
+}
+
 // ---- ffxDispatch detour ----
 typedef ffxReturnCode_t (WINAPI* PFN_ffxDispatch)(ffxContext*, const ffxDispatchDescHeader*);
 PFN_ffxDispatch   o_ffxDispatch = nullptr;
@@ -65,6 +140,12 @@ void HandleFsr3(const FfxFsr3DispatchDescription* d) {
     OnUpscaleDispatch((ID3D12Resource*)d->depth.resource,
                       (ID3D12Resource*)d->motionVectors.resource,
                       cam, (uint32_t)d->depth.state, (uint32_t)d->motionVectors.state);
+    // Copy the depth into our stable texture NOW, on the game's command list, while it is still in
+    // its FSR-input state (the only deterministic point). d->commandList is the raw ID3D12 command
+    // list (the DX12 backend's FfxCommandList is the ID3D12CommandList*).
+    if (d->commandList && d->depth.resource)
+        RecordDepthCopy((ID3D12GraphicsCommandList*)d->commandList,
+                        (ID3D12Resource*)d->depth.resource, (uint32_t)d->depth.state);
 }
 
 int WINAPI hkFsr3CtxDispatchUpscale(void* ctx, const FfxFsr3DispatchDescription* d) {
@@ -157,6 +238,14 @@ bool GetLatest(ID3D12Resource** depth, ID3D12Resource** mv, Cam* cam) {
     return true;
 }
 
+bool GetDepthSRV(ID3D12Resource** tex, DXGI_FORMAT* srvFmt) {
+    std::lock_guard<std::mutex> lk(s_mtx);
+    if (!s_depthCopy) return false;
+    if (tex)    *tex    = s_depthCopy;
+    if (srvFmt) *srvFmt = s_srvFmt;
+    return true;
+}
+
 void Install() {
     HMODULE u32 = GetModuleHandleW(L"kernel32.dll");
     if (u32) {
@@ -187,6 +276,9 @@ void Uninstall() {
     if (o_fsr3UpscalerCtxDispatch) DetourDetach(&(PVOID&)o_fsr3UpscalerCtxDispatch, hkFsr3UpscalerCtxDispatch);
     DetourTransactionCommit();
     s_ffxHooked = false;
+    { std::lock_guard<std::mutex> lk(s_mtx);
+      if (s_depthCopy) { s_depthCopy->Release(); s_depthCopy = nullptr; }
+      if (s_device)    { s_device->Release();    s_device = nullptr; } }
 }
 
 } // namespace DepthCapture

@@ -5,6 +5,7 @@
 #include "../overlay/overlay.h"
 #include "../warp/warp_renderer.h"
 #include "../input/mouse_tracker.h"
+#include "../capture/depth_capture.h"
 
 #include <thread>
 #include <mutex>
@@ -317,10 +318,15 @@ void PresenterThread() {
         wpRt.runtimeSuppress = wpRt.menuDetect && Overlay::InGameMenu();
 
         float fovV = WarpRenderer::Params().fovDeg * 3.14159265f / 180.0f;
+        // Phase 1: feed the captured depth so mode-4 weapon/hand lock can keep the near-field
+        // (gun + optics) screen-locked while the world reprojects. Null until the first FSR dispatch,
+        // in which case the warp falls back to pure rotation (weapon-lock auto-off).
+        ID3D12Resource* depthTex = nullptr; DXGI_FORMAT depthFmt = DXGI_FORMAT_UNKNOWN;
+        DepthCapture::GetDepthSRV(&depthTex, &depthFmt);
         WarpRenderer::Instance().ReprojectInto(s_presentQueue,
                                                frame, D3D12_RESOURCE_STATE_PRESENT,
                                                bb,    D3D12_RESOURCE_STATE_PRESENT,
-                                               nullptr, DXGI_FORMAT_UNKNOWN,
+                                               depthTex, depthFmt,
                                                nullptr, DXGI_FORMAT_UNKNOWN,
                                                0.0f, fovV,
                                                nullptr, D3D12_RESOURCE_STATE_PRESENT,

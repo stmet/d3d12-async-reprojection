@@ -30,4 +30,9 @@ void OnUpscaleDispatch(ID3D12Resource* depth, ID3D12Resource* mv, const Cam& cam
 // presenter must copy under the same frame it reads (a fence-gated copy, added in the next phase).
 bool GetLatest(ID3D12Resource** depth, ID3D12Resource** mv, Cam* cam);
 
+// Our own stable copy of the latest depth (ALLOW_SIMULTANEOUS_ACCESS, render resolution) for the
+// presenter/warp to sample as an SRV from COMMON with no barrier. Returns false until the first copy.
+// `srvFmt` is the SRV-compatible format (e.g. R32_FLOAT for a D32 depth).
+bool GetDepthSRV(ID3D12Resource** tex, DXGI_FORMAT* srvFmt);
+
 } // namespace DepthCapture

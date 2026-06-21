@@ -88,6 +88,7 @@ struct FfxResourceFSR3 {
     wchar_t name[64];
 };
 
+// Decoupled UPSCALER dispatch (ffxFsr3UpscalerContextDispatch) — has the 3 dilated* shared resources.
 struct FfxFsr3DispatchDescription {
     void*           commandList;
     FfxResourceFSR3 color;
@@ -103,7 +104,7 @@ struct FfxFsr3DispatchDescription {
     FfxFloatCoords2D jitterOffset;
     FfxFloatCoords2D motionVectorScale;
     FfxDimensions2D  renderSize;
-    FfxDimensions2D  upscaleSize;   // present in the current FSR3 SDK layout (CP2077) — aligns cam params
+    FfxDimensions2D  upscaleSize;
     bool  enableSharpening;
     float sharpness;
     float frameTimeDelta;
@@ -114,4 +115,33 @@ struct FfxFsr3DispatchDescription {
     float cameraFovAngleVertical;
     float viewSpaceToMetersFactor;
     unsigned int flags;
+};
+
+// COMBINED FSR3-context upscale dispatch (ffxFsr3ContextDispatchUpscale) — what Cyberpunk calls
+// directly. Only 7 resources (NO dilated* trio), upscaleOutput, then cam, flags, frameID. The camera
+// params are only correct when read through THIS layout for that hook.
+struct FfxFsr3DispatchUpscaleDescCombined {
+    void*           commandList;
+    FfxResourceFSR3 color;
+    FfxResourceFSR3 depth;
+    FfxResourceFSR3 motionVectors;
+    FfxResourceFSR3 exposure;
+    FfxResourceFSR3 reactive;
+    FfxResourceFSR3 transparencyAndComposition;
+    FfxResourceFSR3 upscaleOutput;
+    FfxFloatCoords2D jitterOffset;
+    FfxFloatCoords2D motionVectorScale;
+    FfxDimensions2D  renderSize;
+    FfxDimensions2D  upscaleSize;
+    bool  enableSharpening;
+    float sharpness;
+    float frameTimeDelta;
+    float preExposure;
+    bool  reset;
+    float cameraNear;
+    float cameraFar;
+    float cameraFovAngleVertical;
+    float viewSpaceToMetersFactor;
+    unsigned int flags;
+    uint64_t frameID;
 };

@@ -133,35 +133,43 @@ void HookFfxModule(HMODULE mod) {
 }
 
 // ---- native FSR3 SDK dispatch detours (FSR 3.0 — Cyberpunk's path) ----
-typedef int (WINAPI* PFN_Fsr3Dispatch)(void*, const FfxFsr3DispatchDescription*);
+// Take the desc as void* and cast to the layout matching each entry point (they differ: the combined
+// FSR3-context dispatch has 7 resources, the decoupled upscaler has 10).
+typedef int (WINAPI* PFN_Fsr3Dispatch)(void*, const void*);
 PFN_Fsr3Dispatch o_fsr3CtxDispatchUpscale  = nullptr;
 PFN_Fsr3Dispatch o_fsr3UpscalerCtxDispatch = nullptr;
 
-void HandleFsr3(const FfxFsr3DispatchDescription* d) {
-    if (!d) return;
-    Cam cam;
-    cam.nearZ = d->cameraNear; cam.farZ = d->cameraFar; cam.fovV = d->cameraFovAngleVertical;
-    cam.renderW = d->renderSize.width; cam.renderH = d->renderSize.height;
-    OnUpscaleDispatch((ID3D12Resource*)d->depth.resource,
-                      (ID3D12Resource*)d->motionVectors.resource,
-                      cam, (uint32_t)d->depth.state, (uint32_t)d->motionVectors.state);
-    // Copy the depth into our stable texture NOW, on the game's command list, while it is still in
-    // its FSR-input state (the only deterministic point). d->commandList is the raw ID3D12 command
-    // list (the DX12 backend's FfxCommandList is the ID3D12CommandList*).
-    if (d->commandList && d->depth.resource)
-        RecordDepthCopy((ID3D12GraphicsCommandList*)d->commandList,
-                        (ID3D12Resource*)d->depth.resource, (uint32_t)d->depth.state);
+// Shared: store latest depth/mv/cam and copy depth on the game's command list.
+void HandleDispatch(void* commandList, void* depthRes, uint32_t depthState,
+                    void* mvRes, uint32_t mvState, const Cam& cam) {
+    OnUpscaleDispatch((ID3D12Resource*)depthRes, (ID3D12Resource*)mvRes, cam, depthState, mvState);
+    if (commandList && depthRes)
+        RecordDepthCopy((ID3D12GraphicsCommandList*)commandList, (ID3D12Resource*)depthRes, depthState);
 }
 
-int WINAPI hkFsr3CtxDispatchUpscale(void* ctx, const FfxFsr3DispatchDescription* d) {
+int WINAPI hkFsr3CtxDispatchUpscale(void* ctx, const void* desc) {
     static bool logged = false;
-    if (!logged) { logged = true; LOG_INFO("DepthCapture: upscale dispatched via ffxFsr3ContextDispatchUpscale"); }
-    HandleFsr3(d); return o_fsr3CtxDispatchUpscale(ctx, d);
+    if (!logged) { logged = true; LOG_INFO("DepthCapture: upscale dispatched via ffxFsr3ContextDispatchUpscale (combined layout)"); }
+    const FfxFsr3DispatchUpscaleDescCombined* d = (const FfxFsr3DispatchUpscaleDescCombined*)desc;
+    if (d) {
+        Cam cam; cam.nearZ = d->cameraNear; cam.farZ = d->cameraFar; cam.fovV = d->cameraFovAngleVertical;
+        cam.renderW = d->renderSize.width; cam.renderH = d->renderSize.height;
+        HandleDispatch(d->commandList, d->depth.resource, (uint32_t)d->depth.state,
+                       d->motionVectors.resource, (uint32_t)d->motionVectors.state, cam);
+    }
+    return o_fsr3CtxDispatchUpscale(ctx, desc);
 }
-int WINAPI hkFsr3UpscalerCtxDispatch(void* ctx, const FfxFsr3DispatchDescription* d) {
+int WINAPI hkFsr3UpscalerCtxDispatch(void* ctx, const void* desc) {
     static bool logged = false;
-    if (!logged) { logged = true; LOG_INFO("DepthCapture: upscale dispatched via ffxFsr3UpscalerContextDispatch"); }
-    HandleFsr3(d); return o_fsr3UpscalerCtxDispatch(ctx, d);
+    if (!logged) { logged = true; LOG_INFO("DepthCapture: upscale dispatched via ffxFsr3UpscalerContextDispatch (upscaler layout)"); }
+    const FfxFsr3DispatchDescription* d = (const FfxFsr3DispatchDescription*)desc;
+    if (d) {
+        Cam cam; cam.nearZ = d->cameraNear; cam.farZ = d->cameraFar; cam.fovV = d->cameraFovAngleVertical;
+        cam.renderW = d->renderSize.width; cam.renderH = d->renderSize.height;
+        HandleDispatch(d->commandList, d->depth.resource, (uint32_t)d->depth.state,
+                       d->motionVectors.resource, (uint32_t)d->motionVectors.state, cam);
+    }
+    return o_fsr3UpscalerCtxDispatch(ctx, desc);
 }
 
 void HookFsr3Module(HMODULE mod) {

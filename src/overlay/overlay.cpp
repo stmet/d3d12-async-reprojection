@@ -317,22 +317,24 @@ void BuildUI() {
                                       "the gun. Raise to capture the optic display.");
 
                 ImGui::Spacing();
-                ImGui::Checkbox("ADS profile (auto by FOV)", &wp.adsDetect);
+                ImGui::Checkbox("ADS profile (auto by depth)", &wp.adsDetect);
                 ImGui::SameLine();
                 ImGui::TextColored(wp.adsActive ? ImVec4(1.0f, 0.85f, 0.3f, 1.0f) : ImVec4(0.5f, 0.7f, 1.0f, 1.0f),
                                    wp.adsActive ? "[ADS]" : "[hip]");
                 ImGui::SameLine(); ImGui::TextDisabled("(?)");
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("While aiming, the optic moves closer and fills more of the screen, so\n"
-                                      "hip settings ghost it. Detected from the captured FOV narrowing (zoom)\n"
-                                      "below the hip-fire baseline — works regardless of keybind. Swaps to the\n"
-                                      "separate ADS lock profile below. Needs auto-FOV / FSR capture.");
-                ImGui::SliderFloat("ADS FOV ratio", &wp.adsFovRatio, 0.5f, 0.99f, "%.2f");
+                    ImGui::SetTooltip("Cyberpunk doesn't change FOV on aim, but the gun/optic fills the screen\n"
+                                      "center-lower when aiming (hip-fire that area is distant world). Detects\n"
+                                      "ADS from the near-field coverage of that region — keybind-agnostic.\n"
+                                      "Swaps to the separate ADS lock profile below.");
+                ImGui::Text("  center near-coverage %.0f%%  (ADS if > %.0f%%)",
+                            wp.adsCoverageNow * 100.0f, wp.adsCoverage * 100.0f);
+                ImGui::SliderFloat("ADS coverage thresh", &wp.adsCoverage, 0.05f, 0.95f, "%.2f");
                 ImGui::SameLine(); ImGui::TextDisabled("(?)");
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("ADS triggers when captured FOV drops below this fraction of your\n"
-                                      "hip-fire FOV. Lower = only strong zoom counts as ADS; higher = even a\n"
-                                      "slight zoom triggers it.");
+                    ImGui::SetTooltip("ADS triggers when the center-lower near-coverage exceeds this. Watch the\n"
+                                      "live %% above: note it at hip vs aimed, then set the threshold between\n"
+                                      "the two. Lower = easier to trigger.");
                 ImGui::Checkbox("force ADS (tuning)", &wp.adsForce);
                 ImGui::SameLine(); ImGui::TextDisabled("(?)");
                 if (ImGui::IsItemHovered())

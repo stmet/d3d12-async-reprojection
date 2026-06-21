@@ -62,7 +62,6 @@ std::atomic<int64_t>       s_gameIntervalQpc{0};        // smoothed interval bet
 // Display dimensions (cached at Start) — used to normalize the mouse delta for gain calibration,
 // matching the warp's own screen-width normalization so the regressed slope IS the warp gain.
 float                      s_dispW = 0.0f, s_dispH = 0.0f;
-float                      s_baseFov = 0.0f;   // hip-fire FOV baseline (slow max) for FOV-based ADS detection
 
 std::thread                s_thread;
 std::atomic<bool>          s_running{false};
@@ -324,12 +323,14 @@ void PresenterThread() {
         DepthCapture::Cam cam; bool haveCam = DepthCapture::GetLatest(nullptr, nullptr, &cam);
         float capFov = haveCam ? cam.fovV : 0.0f;
         bool  fovSane = (capFov > 0.30f && capFov < 2.60f);   // ~17deg .. ~149deg
-        if (fovSane) s_baseFov = (capFov > s_baseFov) ? capFov : (s_baseFov * 0.999f);  // hip-fire FOV = slow max
         wpRt.capturedFovDeg = fovSane ? capFov * 57.29578f : 0.0f;
 
-        // ADS = the game zoomed in (FOV narrowed well below the hip-fire baseline).
-        wpRt.adsActive = wpRt.adsForce ||
-            (wpRt.adsDetect && fovSane && s_baseFov > 0.01f && capFov < wpRt.adsFovRatio * s_baseFov);
+        // ADS by depth profile: Cyberpunk doesn't change FOV on aim, but the gun/optic fills the
+        // screen center-lower when aiming (hip-fire the center is distant world). Measure near-field
+        // coverage of that region from the captured depth and switch to the ADS lock profile.
+        DepthCapture::ComputeNearCoverage(s_presentQueue, wpRt.nearDepthCut);
+        wpRt.adsCoverageNow = DepthCapture::GetNearCoverage();
+        wpRt.adsActive = wpRt.adsForce || (wpRt.adsDetect && wpRt.adsCoverageNow > wpRt.adsCoverage);
 
         float fovV = (wpRt.autoFov && fovSane) ? capFov : (wpRt.fovDeg * 3.14159265f / 180.0f);
         // Phase 1: feed the captured depth so mode-4 weapon/hand lock can keep the near-field

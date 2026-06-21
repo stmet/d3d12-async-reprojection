@@ -35,4 +35,11 @@ bool GetLatest(ID3D12Resource** depth, ID3D12Resource** mv, Cam* cam);
 // `srvFmt` is the SRV-compatible format (e.g. R32_FLOAT for a D32 depth).
 bool GetDepthSRV(ID3D12Resource** tex, DXGI_FORMAT* srvFmt);
 
+// ADS detection by depth profile: sample the captured depth over a center-lower screen region and
+// report the fraction that is near-field (gun/optic). Hip-fire ~0 (center is distant world); ADS jumps
+// high (the sight fills the center). Run once per present on the present queue; result is read back with
+// a few frames' delay (no stall). nearCut is the reversed-Z near threshold (gun = high depth).
+void  ComputeNearCoverage(ID3D12CommandQueue* queue, float nearCut);
+float GetNearCoverage();   // 0..1, latest available (a few frames latent)
+
 } // namespace DepthCapture

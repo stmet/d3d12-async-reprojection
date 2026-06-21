@@ -66,6 +66,13 @@ struct WarpParams {
     float weaponDilate  = 0.05f;   // mode 4: UV radius to fill weapon-mask holes (scope lens at world depth)
     float fovDeg        = 59.0f;   // manual vertical FOV (deg) for the mode-4 perspective warp (lean build
                                    // has no FSR dispatch capture to read it from — tune to match the game)
+    // ---- disocclusion / fast-flick edge handling (mode 4) ----
+    // We have no render guard band (only the final frame), so rotating past the frame edge has no source
+    // data. maxWarpDeg caps the per-present rotation so the disoccluded band can't get huge on fast
+    // flicks (the eye is motion-blurred then anyway); edgeFade softens whatever band remains to black
+    // instead of smearing the clamped border pixel across it.
+    float maxWarpDeg    = 15.0f;   // clamp |yaw|,|pitch| per present (deg); bounds the smear on hard flicks
+    float edgeFade      = 0.04f;   // UV width to fade out-of-frame samples to black (0 = off / clamp smear)
 
     // ---- HUD lock (region-based; flat UI has no usable depth) — superseded by the hud-less pivot,
     // kept as a fallback. Default off (the visible circle/rectangle looks worse than the swim). ----

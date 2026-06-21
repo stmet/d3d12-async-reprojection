@@ -71,6 +71,7 @@ const char* kReprojectShader =
 "    float  gUiThreshold;    // |present-hudless| (max channel) -> UI; mask ramps thr..2*thr\n"
 "    uint   gUiErode;        // UI-mask erosion radius (px); rejects film-grain false positives\n"
 "    uint   gDebugView;      // 1 = output the UI mask as grayscale (tuning)\n"
+"    float  gEdgeFade;       // disocclusion fade: UV width over which out-of-frame samples ramp to black (0=off)\n"
 "};\n"
 "struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; };\n"
 "VSOut VSMain(uint id : SV_VertexID) {\n"
@@ -238,7 +239,16 @@ const char* kReprojectShader =
 "        if (gDebugView != 0) return float4(mH, mH, mH, 1.0f);\n"
 "        return float4(lerp(warpedScene, pH, mH), 1.0f);\n"
 "    }\n"
-"    return gColor.Sample(gLin, suv);\n"
+"    float4 outc = gColor.Sample(gLin, suv);\n"
+"    // Disocclusion feather: where the warp sampled past the frame edge (suv outside [0,1]) the clamp\n"
+"    // sampler would smear the border pixel. Instead ramp those pixels to black over gEdgeFade UV, so a\n"
+"    // fast flick shows a soft darkened margin rather than a streaked smear.\n"
+"    if (gEdgeFade > 0.0f) {\n"
+"        float2 over = max(max(-suv, suv - 1.0f), 0.0f);\n"
+"        float outAmt = max(over.x, over.y);\n"
+"        outc.rgb *= saturate(1.0f - outAmt / gEdgeFade);\n"
+"    }\n"
+"    return outc;\n"
 "}\n";
 
 const char* kShader =
@@ -435,7 +445,7 @@ bool BuildReprojectPipeline() {
     params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
     params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     params[1].Constants.ShaderRegister = 0;
-    params[1].Constants.Num32BitValues = 25;
+    params[1].Constants.Num32BitValues = 26;
     params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
     D3D12_STATIC_SAMPLER_DESC samps[2] = {};
@@ -703,6 +713,13 @@ void WarpRenderer::ReprojectInto(ID3D12CommandQueue* queue,
             pitch = 2.0f * tanHalfV * warpV;
         }
     }
+    // Bound the rotation so a fast flick can't open a huge disocclusion band (the eye is motion-blurred
+    // during a hard flick, so the slightly-incomplete correction isn't perceptible).
+    if (s_params.maxWarpDeg > 0.0f) {
+        float maxRad = s_params.maxWarpDeg * (3.14159265f / 180.0f);
+        if (yaw   >  maxRad) yaw   =  maxRad;  if (yaw   < -maxRad) yaw   = -maxRad;
+        if (pitch >  maxRad) pitch =  maxRad;  if (pitch < -maxRad) pitch = -maxRad;
+    }
     s_lastPresentQpc = now;
     s_params.lastU = warpU; s_params.lastV = warpV; s_params.lastMvFactor = mvFactor;
 
@@ -725,6 +742,7 @@ void WarpRenderer::ReprojectInto(ID3D12CommandQueue* queue,
         float uiThreshold;
         UINT  uiErode;
         UINT  debugView;
+        float edgeFade;
     } consts = {
         warpU, warpV,
         s_params.mvScale * s_params.sign, s_params.mvScale * s_params.sign,
@@ -743,7 +761,8 @@ void WarpRenderer::ReprojectInto(ID3D12CommandQueue* queue,
         hud ? 1u : 0u,
         s_params.uiThreshold,
         (UINT)(s_params.uiErode < 0 ? 0 : s_params.uiErode),
-        s_params.debugMask ? 1u : 0u
+        s_params.debugMask ? 1u : 0u,
+        s_params.edgeFade
     };
 
     UINT slot = s_frameIdx % kFrames;
@@ -797,7 +816,7 @@ void WarpRenderer::ReprojectInto(ID3D12CommandQueue* queue,
     ID3D12DescriptorHeap* heaps[] = { s_rpSrvHeap };
     s_list->SetDescriptorHeaps(1, heaps);
     s_list->SetGraphicsRootDescriptorTable(0, gpu);
-    s_list->SetGraphicsRoot32BitConstants(1, 25, &consts, 0);
+    s_list->SetGraphicsRoot32BitConstants(1, 26, &consts, 0);
     s_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     s_list->DrawInstanced(3, 1, 0, 0);
 

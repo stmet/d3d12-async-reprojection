@@ -270,6 +270,19 @@ void BuildUI() {
                                   "dispatch capture to read it from). Set it to match the game's CURRENT FOV.\n"
                                   "With angular gain on, this is what makes the warp magnitude correct: when\n"
                                   "you zoom/ADS, lower this to match and the on-screen motion scales right.");
+            ImGui::SliderFloat("max warp (deg)", &wp.maxWarpDeg, 0.0f, 40.0f, "%.0f");
+            ImGui::SameLine(); ImGui::TextDisabled("(?)");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Caps how far a single present may rotate, bounding the disoccluded edge\n"
+                                  "band on fast flicks (no render guard band exists, so rotating past the\n"
+                                  "frame edge has no source pixels). Lower = less smear on hard flicks but\n"
+                                  "slightly less correction during them; 0 = uncapped.");
+            ImGui::SliderFloat("edge fade", &wp.edgeFade, 0.0f, 0.15f, "%.3f");
+            ImGui::SameLine(); ImGui::TextDisabled("(?)");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Fades out-of-frame samples to black over this UV width instead of smearing\n"
+                                  "the clamped border pixel across the disoccluded band. A soft dark margin on\n"
+                                  "fast flicks usually reads better than a streak. 0 = off (clamp smear).");
         }
 
         if (Presenter::AsyncEnabled()) {

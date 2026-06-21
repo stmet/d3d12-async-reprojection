@@ -84,8 +84,15 @@ foreach ($seg in $segments) {
     $pfMed = Med $pf
     $lockRatio = if ($rf -gt 1) { $pfMed / $rf } else { 0 }
     $jitCap = if ($rf -gt 1) { 1000.0 / $rf * 0.5 } else { 5.0 }
-    $phaseLocked = ($lockRatio -ge 0.95 -and $lockRatio -le 1.05 -and $missPerSec -lt 2.0 -and (Pct $ji 99) -lt $jitCap)
-    $verdict = if ($phaseLocked) { "TRUSTWORTHY" } else { "SUSPECT (presents not phase-locked)" }
+    $ji99 = Pct $ji 99
+    # Break the phase-lock test into its specific failure reasons so the verdict is actionable.
+    $reasons = @()
+    if ($lockRatio -lt 0.95) { $reasons += ("under-refresh ({0:N0}/{1:N0}fps={2:P0})" -f $pfMed, $rf, $lockRatio) }
+    if ($lockRatio -gt 1.05) { $reasons += "over-refresh (vsync off?)" }
+    if ($missPerSec -ge 2.0) { $reasons += ("{0:N0} missed/s" -f $missPerSec) }
+    if ($ji99 -ge $jitCap)   { $reasons += ("jitter p99 {0:N1}>{1:N1}ms" -f $ji99, $jitCap) }
+    $phaseLocked = ($reasons.Count -eq 0)
+    $verdict = if ($phaseLocked) { "TRUSTWORTHY" } else { "SUSPECT: " + ($reasons -join ", ") }
     $vColor  = if ($phaseLocked) { "Green" } else { "Yellow" }
 
     $en  = if ($r0.enabled -eq '1') { "on" } else { "OFF" }

@@ -104,7 +104,8 @@ struct FfxFsr3DispatchDescription {
     FfxFloatCoords2D jitterOffset;
     FfxFloatCoords2D motionVectorScale;
     FfxDimensions2D  renderSize;
-    FfxDimensions2D  upscaleSize;
+    // NO upscaleSize in Cyberpunk's FSR 3.0 build (verified: with it, cameraNear read the FOV value
+    // i.e. cam was 8 bytes too late).
     bool  enableSharpening;
     float sharpness;
     float frameTimeDelta;
@@ -132,7 +133,7 @@ struct FfxFsr3DispatchUpscaleDescCombined {
     FfxFloatCoords2D jitterOffset;
     FfxFloatCoords2D motionVectorScale;
     FfxDimensions2D  renderSize;
-    FfxDimensions2D  upscaleSize;
+    // NO upscaleSize (Cyberpunk's FSR 3.0 layout) — see note on FfxFsr3DispatchDescription.
     bool  enableSharpening;
     float sharpness;
     float frameTimeDelta;

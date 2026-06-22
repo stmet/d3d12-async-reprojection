@@ -1,0 +1,28 @@
+name: build
+
+on:
+  push:
+    branches: [main, lean-lowlatency]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Vendored deps (Dear ImGui sources + prebuilt x64 Detours lib) live under external/, and
+      # d3d12/d3dcompiler ship with the Windows SDK on the runner — no extra setup needed.
+      - name: Configure (x64)
+        run: cmake -S . -B build -A x64
+
+      - name: Build dxgi.dll (Release)
+        run: cmake --build build --config Release --target dxgi
+
+      - name: Upload dxgi.dll
+        uses: actions/upload-artifact@v4
+        with:
+          name: dxgi-dll
+          path: build/Release/dxgi.dll
+          if-no-files-found: error

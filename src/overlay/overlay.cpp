@@ -275,12 +275,13 @@ void BuildUI() {
             ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.5f, 1.0f), "perspective rotational (fold-free, depth-independent)");
             if (wp.mode == 6) {
                 ImGui::TextColored(ImVec4(0.6f, 0.9f, 1.0f, 1.0f), "+ true reprojection (raymarch frozen depth)");
-                ImGui::SliderFloat("translation scale", &wp.parallaxStrength, -2.0f, 2.0f, "%.3f");
+                ImGui::SliderFloat("translation scale", &wp.reprojScale, -0.20f, 0.20f, "%.4f");
                 ImGui::SameLine(); ImGui::TextDisabled("(?)");
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Scales the fitted camera translation fed to the raymarch. 0 = pure\n"
-                                      "rotational reprojection. Flip the sign if movement parallaxes the wrong\n"
-                                      "way. The visible benefit grows as the game fps drops (more to correct).");
+                    ImGui::SetTooltip("Camera-move gain for the raymarch (ro = camT*scale, a DIRECT move in\n"
+                                      "depth units). KEEP SMALL: camT~3 walking, so >0.1 tears the scene.\n"
+                                      "0 = pure rotational reprojection. Flip sign if movement goes the wrong\n"
+                                      "way. Benefit grows as game fps drops (more camera motion to correct).");
                 ImGui::SliderInt("raymarch steps", &wp.raySteps, 4, 128);
                 ImGui::SameLine(); ImGui::TextDisabled("(?)");
                 if (ImGui::IsItemHovered())

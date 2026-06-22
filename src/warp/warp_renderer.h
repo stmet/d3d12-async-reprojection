@@ -124,7 +124,10 @@ struct WarpParams {
     float parallaxStrength = 0.30f;
     // mode 6 = true reprojection: raymarch each pixel's view ray through the frozen depth buffer (uses the
     // reconstructed camera: FOV + mouse rotation + camT translation). raySteps trades quality for cost.
-    int   raySteps = 32;
+    // reprojScale is the camera-offset gain: ro = camT*reprojScale is a DIRECT camera move in 1/d depth
+    // units, so it must be small (camT~3 when walking; >0.1 already tears). Separate from mode-5 strength.
+    int   raySteps  = 48;
+    float reprojScale = 0.03f;
 
     // Filled by the renderer for the overlay HUD.
     float lastU = 0.0f, lastV = 0.0f;   // last rotational offset (UV)

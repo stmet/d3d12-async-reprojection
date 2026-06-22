@@ -192,6 +192,14 @@ void BuildUI() {
                                   ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoInputs;
     if (ImGui::Begin("##areproj_status", nullptr, badgeFlags)) {
         ImGui::Text("AsyncReproj  %.1f FPS", io.Framerate);
+        // Phase 3 sensor: surface camT here too, since the menu steals the mouse and you can't move/look
+        // while it's open. Lets you strafe/walk and watch the fitted translation live.
+        WarpParams& wpBadge = WarpRenderer::Params();
+        if (wpBadge.parallaxFit) {
+            ImGui::TextColored(ImVec4(0.6f, 0.9f, 1.0f, 1.0f),
+                               "camT X%+.4f Y%+.4f Z%+.4f  c%.2f",
+                               wpBadge.camTx, wpBadge.camTy, wpBadge.camTz, wpBadge.camTransConf);
+        }
         ImGui::TextDisabled("[INSERT] menu");
     }
     ImGui::End();

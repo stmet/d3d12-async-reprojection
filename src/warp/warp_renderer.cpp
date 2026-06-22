@@ -898,7 +898,8 @@ void WarpRenderer::ReprojectInto(ID3D12CommandQueue* queue,
         s_params.edgeFade,
         effMaskDilate,
         s_params.camTx, s_params.camTy, s_params.camTz,
-        (s_params.mode == 6) ? s_params.reprojScale : (s_params.mode == 5) ? s_params.parallaxStrength : 0.0f,
+        (s_params.mode == 6) ? ((s_params.adsActive && s_params.adsRotationOnly) ? 0.0f : s_params.reprojScale)
+                             : (s_params.mode == 5) ? s_params.parallaxStrength : 0.0f,
         s_params.camNearZ, s_params.camFarZ,
         (UINT)(s_params.raySteps < 1 ? 1 : s_params.raySteps)
     };

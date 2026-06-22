@@ -287,6 +287,12 @@ void BuildUI() {
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Steps marched through the frozen depth per pixel. More = cleaner\n"
                                       "occlusion/edges but costlier. Watch present fps / missed vblanks.");
+                ImGui::Checkbox("ADS: rotation-only (steadies optic)", &wp.adsRotationOnly);
+                ImGui::SameLine(); ImGui::TextDisabled("(?)");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Drop translation reprojection while aiming. A see-through optic is at\n"
+                                      "world depth, so translation makes the through-glass view swim; aiming is\n"
+                                      "mostly rotation, so this steadies the optic at no real cost.");
                 ImGui::Text("camT X%+.4f Y%+.4f Z%+.4f  c%.2f", wp.camTx, wp.camTy, wp.camTz, wp.camTransConf);
             }
             if (wp.mode == 5) {

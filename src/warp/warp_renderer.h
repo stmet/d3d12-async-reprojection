@@ -128,6 +128,9 @@ struct WarpParams {
     // units, so it must be small (camT~3 when walking; >0.1 already tears). Separate from mode-5 strength.
     int   raySteps  = 48;
     float reprojScale = 0.03f;
+    // ADS: a see-through optic is at world depth, so translation reprojection makes the through-glass view
+    // swim. Aiming is mostly rotation anyway, so drop translation while ADS (rotation-only) to steady it.
+    bool  adsRotationOnly = true;
 
     // Filled by the renderer for the overlay HUD.
     float lastU = 0.0f, lastV = 0.0f;   // last rotational offset (UV)

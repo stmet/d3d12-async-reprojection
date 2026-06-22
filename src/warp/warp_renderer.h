@@ -122,6 +122,9 @@ struct WarpParams {
     // the overall sign+scale; 0 = behaves exactly like mode 4. Flip the sign if parallax pushes the world
     // the wrong way. With the reversed-Z 1/d depth and real camT (~2 walk), the usable range is small.
     float parallaxStrength = 0.30f;
+    // mode 6 = true reprojection: raymarch each pixel's view ray through the frozen depth buffer (uses the
+    // reconstructed camera: FOV + mouse rotation + camT translation). raySteps trades quality for cost.
+    int   raySteps = 32;
 
     // Filled by the renderer for the overlay HUD.
     float lastU = 0.0f, lastV = 0.0f;   // last rotational offset (UV)

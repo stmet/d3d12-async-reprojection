@@ -77,6 +77,7 @@ const char* kReprojectShader =
 "    float  gCamTx; float gCamTy; float gCamTz;  // mode 5: fitted camera translation (view space)\n"
 "    float  gParallax;       // mode 5: parallax strength (0 = off; folds sign + scale)\n"
 "    float  gNearZ; float gFarZ;                 // mode 5: depth linearization (reversed-Z near/far)\n"
+"    uint   gRaySteps;       // mode 6: raymarch step count\n"
 "};\n"
 "struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; };\n"
 "VSOut VSMain(uint id : SV_VertexID) {\n"
@@ -179,6 +180,55 @@ const char* kReprojectShader =
 "                dSrc = max(dSrc, gDepth.SampleLevel(gPt, suv + pstep * 0.50f, 0).r);\n"
 "                dSrc = max(dSrc, gDepth.SampleLevel(gPt, suv + pstep * 0.75f, 0).r);\n"
 "                if (dSrc > gNearCut) suv = i.uv;\n"
+"            }\n"
+"        }\n"
+"      } else if (gMode == 6) {\n"
+"        // TRUE REPROJECTION (raymarch). Reconstruct the camera from FOV + the fitted rotation (mouse)\n"
+"        // and translation (MV fit) -- no engine matrices -- then march each output pixel's view ray\n"
+"        // through the FROZEN depth buffer to the first surface it hits. That is the geometrically\n"
+"        // correct sample WITH occlusion (a near surface blocks the ray), unlike the single-step warp.\n"
+"        // Benefit scales with how far the camera moved since the frozen frame, so it works at any fps.\n"
+"        float th = gTanHalfV; float tw = gTanHalfV * gAspect;\n"
+"        float nx = i.uv.x*2.0f-1.0f, ny = 1.0f - i.uv.y*2.0f;\n"
+"        float cy=cos(gYaw), sy=sin(gYaw), cp=cos(gPitch), sp=sin(gPitch);\n"
+"        float3 dC = float3(nx*tw, ny*th, 1.0f);\n"
+"        float3 dp = float3(dC.x, cp*dC.y - sp*dC.z, sp*dC.y + cp*dC.z);\n"
+"        float3 f  = float3(cy*dp.x + sy*dp.z, dp.y, -sy*dp.x + cy*dp.z);   // current ray in frozen frame\n"
+"        float3 ro = float3(gCamTx, gCamTy, gCamTz) * gParallax;            // current cam pos in frozen frame\n"
+"        float dHere = gDepth.SampleLevel(gPt, i.uv, 0).r;\n"
+"        if (dHere > gNearCut) {\n"
+"            suv = i.uv;                                   // near-field weapon: screen-lock\n"
+"        } else {\n"
+"            float Zown = 1.0f / max(dHere, 1e-4f);\n"
+"            uint steps = max(gRaySteps, 1u);\n"
+"            float tMax = Zown * 1.25f;                     // march a little past this pixel's own depth\n"
+"            float dt = tMax / steps;\n"
+"            float t = dt; bool hit = false; bool occ = false; float2 puv = i.uv;\n"
+"            [loop] for (uint k=0; k<steps; k++) {\n"
+"                float3 P = ro + f * t;\n"
+"                if (P.z > 1e-4f) {\n"
+"                    puv = float2((P.x/P.z/tw + 1.0f)*0.5f, (1.0f - P.y/P.z/th)*0.5f);\n"
+"                    float sd = gDepth.SampleLevel(gPt, puv, 0).r;\n"
+"                    float Zsurf = 1.0f / max(sd, 1e-4f);\n"
+"                    float diff = P.z - Zsurf;             // marched past the surface => hit\n"
+"                    if (diff > dt * 2.0f) occ = true;     // jumped behind a surface = disocclusion\n"
+"                    if (diff > 0.0f) { hit = true; break; }\n"
+"                }\n"
+"                t += dt;\n"
+"            }\n"
+"            suv = hit ? puv : i.uv;\n"
+"            // Disocclusion fill: a hit through an occluder reveals area the frozen frame lacks; take the\n"
+"            // FURTHEST of 4 neighbors (background) rather than smearing the near edge across the hole.\n"
+"            if (occ) {\n"
+"                float2 e = float2(0.004f / gAspect, 0.004f);\n"
+"                float2 uL=suv+float2(e.x,0), uR=suv-float2(e.x,0), uT=suv+float2(0,e.y), uD=suv-float2(0,e.y);\n"
+"                float zc=1.0f/max(gDepth.SampleLevel(gPt,suv,0).r,1e-4f);\n"
+"                float zL=1.0f/max(gDepth.SampleLevel(gPt,uL ,0).r,1e-4f);\n"
+"                float zR=1.0f/max(gDepth.SampleLevel(gPt,uR ,0).r,1e-4f);\n"
+"                float zT=1.0f/max(gDepth.SampleLevel(gPt,uT ,0).r,1e-4f);\n"
+"                float zD=1.0f/max(gDepth.SampleLevel(gPt,uD ,0).r,1e-4f);\n"
+"                float zf=max(max(max(max(zc,zL),zR),zT),zD);\n"
+"                if (zf==zL) suv=uL; else if (zf==zR) suv=uR; else if (zf==zT) suv=uT; else if (zf==zD) suv=uD;\n"
 "            }\n"
 "        }\n"
 "      } else if (gMode == 3) {\n"
@@ -496,7 +546,7 @@ bool BuildReprojectPipeline() {
     params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
     params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     params[1].Constants.ShaderRegister = 0;
-    params[1].Constants.Num32BitValues = 33;
+    params[1].Constants.Num32BitValues = 34;
     params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
     D3D12_STATIC_SAMPLER_DESC samps[2] = {};
@@ -804,6 +854,7 @@ void WarpRenderer::ReprojectInto(ID3D12CommandQueue* queue,
         float camTx, camTy, camTz;
         float parallax;
         float nearZ, farZ;
+        UINT  raySteps;
     } consts = {
         warpU, warpV,
         s_params.mvScale * s_params.sign, s_params.mvScale * s_params.sign,
@@ -826,8 +877,9 @@ void WarpRenderer::ReprojectInto(ID3D12CommandQueue* queue,
         s_params.edgeFade,
         effMaskDilate,
         s_params.camTx, s_params.camTy, s_params.camTz,
-        (s_params.mode == 5) ? s_params.parallaxStrength : 0.0f,
-        s_params.camNearZ, s_params.camFarZ
+        (s_params.mode == 5 || s_params.mode == 6) ? s_params.parallaxStrength : 0.0f,
+        s_params.camNearZ, s_params.camFarZ,
+        (UINT)(s_params.raySteps < 1 ? 1 : s_params.raySteps)
     };
 
     UINT slot = s_frameIdx % kFrames;
@@ -881,7 +933,7 @@ void WarpRenderer::ReprojectInto(ID3D12CommandQueue* queue,
     ID3D12DescriptorHeap* heaps[] = { s_rpSrvHeap };
     s_list->SetDescriptorHeaps(1, heaps);
     s_list->SetGraphicsRootDescriptorTable(0, gpu);
-    s_list->SetGraphicsRoot32BitConstants(1, 33, &consts, 0);
+    s_list->SetGraphicsRoot32BitConstants(1, 34, &consts, 0);
     s_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     s_list->DrawInstanced(3, 1, 0, 0);
 

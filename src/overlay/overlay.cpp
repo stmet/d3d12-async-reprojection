@@ -216,10 +216,11 @@ void BuildUI() {
         ImGui::Checkbox("Enable warp", &wp.enable);
         // Lean build captures no depth/MV, so only the two geometry-free warps are live: a flat UV
         // shift (mode 0) and the FOV-correct perspective rotation (mode 4, the default).
-        int modeIdx = (wp.mode == 5) ? 2 : (wp.mode == 4) ? 1 : 0;
+        int modeIdx = (wp.mode == 6) ? 3 : (wp.mode == 5) ? 2 : (wp.mode == 4) ? 1 : 0;
         if (ImGui::Combo("mode", &modeIdx,
-                "1: Rotational shift\0""2: Perspective rotational\0""3: Perspective + parallax\0"))
-            wp.mode = (modeIdx == 2) ? 5 : (modeIdx == 1) ? 4 : 0;
+                "1: Rotational shift\0""2: Perspective rotational\0""3: Perspective + parallax\0"
+                "4: True reprojection (raymarch)\0"))
+            wp.mode = (modeIdx == 3) ? 6 : (modeIdx == 2) ? 5 : (modeIdx == 1) ? 4 : 0;
         // ---- gain: angular model (FOV-correct deg/count, the lean default) vs legacy flat UV gain ----
         ImGui::Checkbox("angular gain (FOV-correct deg/count)", &wp.angularGain);
         ImGui::SameLine(); ImGui::TextDisabled("(?)");
@@ -270,8 +271,23 @@ void BuildUI() {
                               "warp off there (the camera isn't moving, so warping just swims the UI). Turn\n"
                               "off if a game doesn't clip the cursor during normal gameplay.");
 
-        if (wp.mode == 4 || wp.mode == 5) {
+        if (wp.mode == 4 || wp.mode == 5 || wp.mode == 6) {
             ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.5f, 1.0f), "perspective rotational (fold-free, depth-independent)");
+            if (wp.mode == 6) {
+                ImGui::TextColored(ImVec4(0.6f, 0.9f, 1.0f, 1.0f), "+ true reprojection (raymarch frozen depth)");
+                ImGui::SliderFloat("translation scale", &wp.parallaxStrength, -2.0f, 2.0f, "%.3f");
+                ImGui::SameLine(); ImGui::TextDisabled("(?)");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Scales the fitted camera translation fed to the raymarch. 0 = pure\n"
+                                      "rotational reprojection. Flip the sign if movement parallaxes the wrong\n"
+                                      "way. The visible benefit grows as the game fps drops (more to correct).");
+                ImGui::SliderInt("raymarch steps", &wp.raySteps, 4, 128);
+                ImGui::SameLine(); ImGui::TextDisabled("(?)");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Steps marched through the frozen depth per pixel. More = cleaner\n"
+                                      "occlusion/edges but costlier. Watch present fps / missed vblanks.");
+                ImGui::Text("camT X%+.4f Y%+.4f Z%+.4f  c%.2f", wp.camTx, wp.camTy, wp.camTz, wp.camTransConf);
+            }
             if (wp.mode == 5) {
                 ImGui::TextColored(ImVec4(0.6f, 0.9f, 1.0f, 1.0f), "+ camera-translation parallax (Phase 3)");
                 ImGui::SliderFloat("parallax strength", &wp.parallaxStrength, -2.0f, 2.0f, "%.3f");

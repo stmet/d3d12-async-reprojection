@@ -283,8 +283,6 @@ void BuildUI() {
                                       "the parallax working. Flip the sign if it goes the wrong way. Scale is\n"
                                       "uncalibrated; once you find a visible value tell me and I'll bake a default.");
                 ImGui::Text("camT X%+.4f Y%+.4f Z%+.4f  c%.2f", wp.camTx, wp.camTy, wp.camTz, wp.camTransConf);
-                ImGui::Text("near %.4f  far %.1f%s", wp.camNearZ, wp.camFarZ,
-                            (wp.camNearZ > 0.0f && wp.camFarZ > wp.camNearZ) ? "" : "  <-- BAD (parallax disabled)");
             }
             ImGui::Checkbox("auto FOV (from FSR capture)", &wp.autoFov);
             ImGui::SameLine();

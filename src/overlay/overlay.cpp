@@ -217,7 +217,8 @@ void BuildUI() {
         // Lean build captures no depth/MV, so only the two geometry-free warps are live: a flat UV
         // shift (mode 0) and the FOV-correct perspective rotation (mode 4, the default).
         int modeIdx = (wp.mode == 5) ? 2 : (wp.mode == 4) ? 1 : 0;
-        if (ImGui::Combo("mode", &modeIdx, "Rotational shift\0Perspective rotational\0Perspective + parallax\0"))
+        if (ImGui::Combo("mode", &modeIdx,
+                "1: Rotational shift\0""2: Perspective rotational\0""3: Perspective + parallax\0"))
             wp.mode = (modeIdx == 2) ? 5 : (modeIdx == 1) ? 4 : 0;
         // ---- gain: angular model (FOV-correct deg/count, the lean default) vs legacy flat UV gain ----
         ImGui::Checkbox("angular gain (FOV-correct deg/count)", &wp.angularGain);
@@ -273,14 +274,17 @@ void BuildUI() {
             ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.5f, 1.0f), "perspective rotational (fold-free, depth-independent)");
             if (wp.mode == 5) {
                 ImGui::TextColored(ImVec4(0.6f, 0.9f, 1.0f, 1.0f), "+ camera-translation parallax (Phase 3)");
-                ImGui::SliderFloat("parallax strength", &wp.parallaxStrength, -60.0f, 60.0f, "%.1f");
+                ImGui::SliderFloat("parallax strength", &wp.parallaxStrength, -300.0f, 300.0f, "%.1f");
                 ImGui::SameLine(); ImGui::TextDisabled("(?)");
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Scales the fitted camera-translation parallax. 0 = behaves exactly like\n"
-                                      "mode 4 (rotation only). Ramp up slowly: near objects should slide against\n"
-                                      "far ones as you strafe/walk. Flip the sign if the world parallaxes the\n"
-                                      "wrong way. Absolute scale is uncalibrated, so tune by eye.");
+                                      "mode 4 (rotation only). For VALIDATION crank it high and strafe/walk WITH\n"
+                                      "NO mouse movement -- mode 2 is dead still then, so any motion you see is\n"
+                                      "the parallax working. Flip the sign if it goes the wrong way. Scale is\n"
+                                      "uncalibrated; once you find a visible value tell me and I'll bake a default.");
                 ImGui::Text("camT X%+.4f Y%+.4f Z%+.4f  c%.2f", wp.camTx, wp.camTy, wp.camTz, wp.camTransConf);
+                ImGui::Text("near %.4f  far %.1f%s", wp.camNearZ, wp.camFarZ,
+                            (wp.camNearZ > 0.0f && wp.camFarZ > wp.camNearZ) ? "" : "  <-- BAD (parallax disabled)");
             }
             ImGui::Checkbox("auto FOV (from FSR capture)", &wp.autoFov);
             ImGui::SameLine();

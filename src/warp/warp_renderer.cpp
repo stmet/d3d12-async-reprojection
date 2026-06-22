@@ -107,7 +107,7 @@ const char* kReprojectShader =
 "        // space point from its depth, rotate it (reuse f = R*ray), add the fitted camera translation,\n"
 "        // and re-project. Near pixels (small Z) shift a lot, far pixels barely move -> real parallax.\n"
 "        // The rotational suv above is the Z->inf limit; this refines it using depth. Strength 0 = mode 4.\n"
-"        if (gMode == 5 && gParallax != 0.0f) {\n"
+"        if (gMode == 5 && gParallax != 0.0f && gNearZ > 0.0f && gFarZ > gNearZ) {\n"
 "            float dC = gDepth.SampleLevel(gPt, i.uv, 0).r;\n"
 "            float Zc = (gNearZ * gFarZ) / (gNearZ + dC * (gFarZ - gNearZ));\n"
 "            float3 Pf = f * Zc + float3(gCamTx, gCamTy, gCamTz) * gParallax;\n"

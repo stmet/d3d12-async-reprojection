@@ -364,7 +364,7 @@ bool BuildCoveragePipeline() {
 // translation, storing them once. The tiny system is solved on the CPU after a few-frame-latent readback.
 constexpr UINT kFitGX = 48, kFitGY = 27;     // ~1300 samples across the frame
 constexpr UINT kFitRing = 4;
-constexpr UINT kFitU = 16;                    // uints per slot (10 used: A00..A22, b0..b2, cnt)
+constexpr UINT kFitU = 24;                    // uints per slot (21 used: 5x5 upper-tri M[15], b[5], cnt)
 ID3D12RootSignature*       s_fitRoot = nullptr;
 ID3D12PipelineState*       s_fitPso  = nullptr;
 ID3D12DescriptorHeap*      s_fitHeap = nullptr;   // [0]=mv SRV (t0), [1]=depth SRV (t1), [2]=accum UAV (u0)
@@ -394,7 +394,8 @@ const char* kFitCS =
 "};\n"
 "[numthreads(1,1,1)]\n"
 "void CSMain() {\n"
-"    float A00=0,A01=0,A02=0,A11=0,A12=0,A22=0, b0=0,b1=0,b2=0; uint cnt=0;\n"
+"    float M00=0,M01=0,M02=0,M03=0,M04=0,M11=0,M12=0,M13=0,M14=0;\n"
+"    float M22=0,M23=0,M24=0,M33=0,M34=0,M44=0, b0=0,b1=0,b2=0,b3=0,b4=0; uint cnt=0;\n"
 "    float th = gTanHalfV; float tw = gTanHalfV * gAspect;\n"
 "    float cy=cos(gYaw), sy=sin(gYaw), cp=cos(gPitch), sp=sin(gPitch);\n"
 "    [loop] for (uint yy=0; yy<gGY; ++yy)\n"
@@ -413,33 +414,50 @@ const char* kFitCS =
 "          float3 dp  = float3(dir.x, cp*dir.y - sp*dir.z, sp*dir.y + cp*dir.z);\n"
 "          float3 fr  = float3(cy*dp.x + sy*dp.z, dp.y, -sy*dp.x + cy*dp.z);\n"
 "          float2 rotuv = (fr.z>1e-4f) ? float2((fr.x/fr.z/tw+1.0f)*0.5f, (1.0f - fr.y/fr.z/th)*0.5f) : uv;\n"
-"          float2 res = mvuv - (rotuv - uv);  // residual flow = translation parallax (+ object motion)\n"
+"          float2 res = mvuv - (rotuv - uv);  // residual = translation parallax + leftover rotation\n"
 "          if (abs(res.x)+abs(res.y) > gMaxFlow) continue;   // reject movers / outliers\n"
-"          // Parallax model: flowUV = w * (M * T). Rows for the x and y observations.\n"
-"          float3 ax = w * float3(-0.5f/tw, 0.0f,      0.5f*nx);\n"
-"          float3 ay = w * float3( 0.0f,    0.5f/th,  -0.5f*ny);\n"
-"          A00 += ax.x*ax.x + ay.x*ay.x; A01 += ax.x*ax.y + ay.x*ay.y; A02 += ax.x*ax.z + ay.x*ay.z;\n"
-"          A11 += ax.y*ax.y + ay.y*ay.y; A12 += ax.y*ax.z + ay.y*ay.z; A22 += ax.z*ax.z + ay.z*ay.z;\n"
-"          b0  += ax.x*res.x + ay.x*res.y; b1 += ax.y*res.x + ay.y*res.y; b2 += ax.z*res.x + ay.z*res.y;\n"
+"          // 5-DOF model: flowUV = w*(M*T) + U. T=(Tx,Ty,Tz) is depth-VARYING parallax; U=(Ux,Uy) is a\n"
+"          // uniform nuisance flow that absorbs residual rotation / sens / MV-scale error (depth-flat),\n"
+"          // so it can't contaminate T. Design rows ax,ay over unknowns [Tx,Ty,Tz,Ux,Uy].\n"
+"          float ax0=w*-0.5f/tw, ax1=0.0f, ax2=w*0.5f*nx, ax3=1.0f, ax4=0.0f;\n"
+"          float ay0=0.0f, ay1=w*0.5f/th, ay2=-w*0.5f*ny, ay3=0.0f, ay4=1.0f;\n"
+"          float rx=res.x, ry=res.y;\n"
+"          M00+=ax0*ax0+ay0*ay0; M01+=ax0*ax1+ay0*ay1; M02+=ax0*ax2+ay0*ay2; M03+=ax0*ax3+ay0*ay3; M04+=ax0*ax4+ay0*ay4;\n"
+"          M11+=ax1*ax1+ay1*ay1; M12+=ax1*ax2+ay1*ay2; M13+=ax1*ax3+ay1*ay3; M14+=ax1*ax4+ay1*ay4;\n"
+"          M22+=ax2*ax2+ay2*ay2; M23+=ax2*ax3+ay2*ay3; M24+=ax2*ax4+ay2*ay4;\n"
+"          M33+=ax3*ax3+ay3*ay3; M34+=ax3*ax4+ay3*ay4; M44+=ax4*ax4+ay4*ay4;\n"
+"          b0+=ax0*rx+ay0*ry; b1+=ax1*rx+ay1*ry; b2+=ax2*rx+ay2*ry; b3+=ax3*rx+ay3*ry; b4+=ax4*rx+ay4*ry;\n"
 "          cnt++;\n"
 "      }\n"
-"    gOut.Store(0, asuint(A00)); gOut.Store(4, asuint(A01)); gOut.Store(8, asuint(A02));\n"
-"    gOut.Store(12,asuint(A11)); gOut.Store(16,asuint(A12)); gOut.Store(20,asuint(A22));\n"
-"    gOut.Store(24,asuint(b0));  gOut.Store(28,asuint(b1));  gOut.Store(32,asuint(b2));\n"
-"    gOut.Store(36, cnt);\n"
+"    gOut.Store(0, asuint(M00)); gOut.Store(4, asuint(M01)); gOut.Store(8, asuint(M02)); gOut.Store(12,asuint(M03)); gOut.Store(16,asuint(M04));\n"
+"    gOut.Store(20,asuint(M11)); gOut.Store(24,asuint(M12)); gOut.Store(28,asuint(M13)); gOut.Store(32,asuint(M14));\n"
+"    gOut.Store(36,asuint(M22)); gOut.Store(40,asuint(M23)); gOut.Store(44,asuint(M24));\n"
+"    gOut.Store(48,asuint(M33)); gOut.Store(52,asuint(M34)); gOut.Store(56,asuint(M44));\n"
+"    gOut.Store(60,asuint(b0)); gOut.Store(64,asuint(b1)); gOut.Store(68,asuint(b2)); gOut.Store(72,asuint(b3)); gOut.Store(76,asuint(b4));\n"
+"    gOut.Store(80, cnt);\n"
 "}\n";
 
-// Solve a symmetric 3x3 system A x = b via the adjugate (A given as [A00,A01,A02,A11,A12,A22]).
-bool Solve3(const double A[6], const double b[3], double x[3]) {
-    double a00=A[0],a01=A[1],a02=A[2],a11=A[3],a12=A[4],a22=A[5];
-    double c00=a11*a22-a12*a12, c01=a02*a12-a01*a22, c02=a01*a12-a02*a11;
-    double det=a00*c00+a01*c01+a02*c02;
-    if (det > -1e-12 && det < 1e-12) return false;
-    double c11=a00*a22-a02*a02, c12=a01*a02-a00*a12, c22=a00*a11-a01*a01;
-    double inv=1.0/det;
-    x[0]=inv*(c00*b[0]+c01*b[1]+c02*b[2]);
-    x[1]=inv*(c01*b[0]+c11*b[1]+c12*b[2]);
-    x[2]=inv*(c02*b[0]+c12*b[1]+c22*b[2]);
+// Solve a 5x5 linear system A x = b by Gaussian elimination with partial pivoting (A is overwritten).
+bool Solve5(double A[5][5], double b[5], double x[5]) {
+    for (int c = 0; c < 5; ++c) {
+        int piv = c; double best = fabs(A[c][c]);
+        for (int r = c + 1; r < 5; ++r) { double v = fabs(A[r][c]); if (v > best) { best = v; piv = r; } }
+        if (best < 1e-15) return false;
+        if (piv != c) {
+            for (int k = 0; k < 5; ++k) { double t = A[c][k]; A[c][k] = A[piv][k]; A[piv][k] = t; }
+            double t = b[c]; b[c] = b[piv]; b[piv] = t;
+        }
+        for (int r = c + 1; r < 5; ++r) {
+            double f = A[r][c] / A[c][c];
+            for (int k = c; k < 5; ++k) A[r][k] -= f * A[c][k];
+            b[r] -= f * b[c];
+        }
+    }
+    for (int r = 4; r >= 0; --r) {
+        double s = b[r];
+        for (int k = r + 1; k < 5; ++k) s -= A[r][k] * x[k];
+        x[r] = s / A[r][r];
+    }
     return true;
 }
 
@@ -608,16 +626,18 @@ void ComputeCameraTranslation(ID3D12CommandQueue* queue, float yawDelta, float p
     if (s_fitSlotFence[slot] != 0 && s_fitFence->GetCompletedValue() >= s_fitSlotFence[slot]) {
         const UINT* r = &s_fitMapped[slot * kFitU];
         auto F = [&](int i){ float f; UINT u = r[i]; memcpy(&f, &u, 4); return (double)f; };
-        double A[6] = { F(0), F(1), F(2), F(3), F(4), F(5) };
-        double b[3] = { F(6), F(7), F(8) };
-        UINT cnt = r[9];
-        // Tikhonov regularization: stabilize a poorly-observed DOF (e.g. near-zero translation, or a
-        // motion that excites only one axis) so the solve can't blow up.
-        double tr = A[0] + A[3] + A[5];
+        // Unpack the 5x5 upper triangle (15) into a full symmetric matrix, then b (5) and cnt.
+        double A[5][5]; double b[5];
+        { int k = 0; for (int i = 0; i < 5; ++i) for (int j = i; j < 5; ++j) { double v = F(k++); A[i][j] = v; A[j][i] = v; } }
+        for (int i = 0; i < 5; ++i) b[i] = F(15 + i);
+        UINT cnt = r[20];
+        // Tikhonov regularization on the diagonal: stabilizes a poorly-observed DOF (near-zero motion,
+        // or a move that excites only one axis) so the solve can't blow up.
+        double tr = A[0][0] + A[1][1] + A[2][2];
         double lam = 1e-3 * (tr / 3.0) + 1e-9;
-        A[0] += lam; A[3] += lam; A[5] += lam;
-        double x[3];
-        if (cnt > 60 && Solve3(A, b, x)) {
+        A[0][0] += lam; A[1][1] += lam; A[2][2] += lam;
+        double x[5];
+        if (cnt > 60 && Solve5(A, b, x)) {
             float conf = (float)cnt / (float)(kFitGX * kFitGY);
             const float a = 0.25f;   // EMA: translation is a per-game-frame velocity; light smoothing
             // MV is a source displacement (old-new) = -(forward flow), so the solve recovers -T. Negate

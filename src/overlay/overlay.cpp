@@ -413,6 +413,18 @@ void BuildUI() {
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Sleep until just before vblank, then latch mouse + warp + present.\n"
                                   "Caps presents to the refresh and minimises input->photon latency.");
+            {
+                WarpParams& wpp = WarpRenderer::Params();
+                ImGui::Checkbox("photon-time latch", &wpp.photonExtrapolate);
+                ImGui::SameLine();
+                if (wpp.photonExtrapolate) ImGui::Text("(+%.1f ms)", wpp.photonLeadMs);
+                else                       ImGui::TextDisabled("(off)");
+                ImGui::SameLine(); ImGui::TextDisabled("(?)");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Extrapolate the displayed camera to when the pixels actually light up\n"
+                                      "(next vblank + mid-screen scanout) instead of the latch instant. Removes\n"
+                                      "that staleness deterministically -> lower effective latency, crisper feel.");
+            }
 
             ImGui::Checkbox("auto-lead", &pp.autoLead);
             ImGui::SameLine();

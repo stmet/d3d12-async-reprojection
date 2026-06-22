@@ -32,6 +32,12 @@ struct WarpParams {
     bool  autoTrim  = true;    // presenter sets trimMs each stat window; manual slider hidden when on
     float trimScale = 0.5f;    // fraction of a game frame to lead by (0.5 = half-frame; lower = gentler)
 
+    // Photon-time latch: extrapolate the displayed camera to the predicted vblank + mid-screen scanout
+    // (when the pixels actually light up) instead of "now", removing the lead+scanout staleness. The
+    // presenter computes the target from the vblank cadence; photonLeadMs is the readout of how far ahead.
+    bool  photonExtrapolate = true;
+    float photonLeadMs      = 0.0f;   // runtime readout (ms ahead of latch the camera is extrapolated)
+
     // ---- angular gain model (lean default, mode 4): the FOV-correct mapping from mouse counts to
     // camera rotation. yaw_radians = counts * (sensDegPer1000 deg / 1000 counts) * (pi/180). This
     // constant is purely the game's mouse sensitivity (the game's yaw-per-count); DPI is already baked
@@ -174,7 +180,7 @@ public:
                        ID3D12Resource* mv,    DXGI_FORMAT mvSrvFmt,
                        float mvFactor, float fovV,
                        ID3D12Resource* hud = nullptr, D3D12_RESOURCE_STATES hudState = D3D12_RESOURCE_STATE_PRESENT,
-                       uint64_t frameSubmitQpc = 0);
+                       uint64_t frameSubmitQpc = 0, uint64_t presentTimeQpc = 0);
 
     // Async-compute warp (the VR-compositor decoupling): warp `color` (replacement backbuffer) into
     // `dest` (the REAL backbuffer, which MUST be created with DXGI_USAGE_UNORDERED_ACCESS) on a

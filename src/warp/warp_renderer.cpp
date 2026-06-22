@@ -790,7 +790,7 @@ void WarpRenderer::ReprojectInto(ID3D12CommandQueue* queue,
                                  ID3D12Resource* mv,    DXGI_FORMAT mvSrvFmt,
                                  float mvFactor, float fovV,
                                  ID3D12Resource* hud,   D3D12_RESOURCE_STATES hudState,
-                                 uint64_t frameSubmitQpc) {
+                                 uint64_t frameSubmitQpc, uint64_t presentTimeQpc) {
     if (!queue || !color || !dest) return;
     // Modes 2/3 consume depth+MV; without them there is nothing to reproject — fall back to the
     // uniform-shift path. Mode 4 (perspective rotational) is depth-independent and needs neither.
@@ -813,11 +813,16 @@ void WarpRenderer::ReprojectInto(ID3D12CommandQueue* queue,
     //    the center matches the uniform shift exactly while the edges curve. Used by modes 0/2/3 too.
     float warpU = 0.0f, warpV = 0.0f, yaw = 0.0f, pitch = 0.0f;
     uint64_t now = MouseTracker::NowQpc();
+    // Photon-time latch: the pixels we present don't light up until the next vblank + scanout, so latch
+    // the CURRENT camera at that predicted photon instant (presentTimeQpc) instead of "now". The frozen-
+    // frame reference (base) stays anchored to the game frame. This deterministically removes the lead+
+    // scanout-sized staleness. 0 = legacy (latch at now). MouseTracker extrapolates the few ms forward.
+    uint64_t latch = presentTimeQpc ? presentTimeQpc : now;
     bool effEnable = s_params.enable && !s_params.runtimeSuppress;
     if (effEnable) {
         uint64_t base = WarpBaseQpc(frameSubmitQpc, now);
         long long cx, cy, bx, by;
-        MouseTracker::GetAccAt(now, cx, cy);
+        MouseTracker::GetAccAt(latch, cx, cy);
         MouseTracker::GetAccAt(base, bx, by);
         long long dx = cx - bx, dy = cy - by;
         if (s_params.angularGain) {

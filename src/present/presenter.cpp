@@ -364,6 +364,17 @@ void PresenterThread() {
             DepthCapture::GetCameraTranslation(t, &conf);
             wpRt.camTx = t[0]; wpRt.camTy = t[1]; wpRt.camTz = t[2]; wpRt.camTransConf = conf;
         }
+        // Photon-time target: the camera is latched at warpStartQpc but the pixels light up at the next
+        // vblank + scanout. Extrapolate the displayed camera to vblank + mid-screen scanout so motion
+        // lands where it's actually seen (lower effective latency, deterministic instead of a fudge).
+        uint64_t photonQpc = 0;
+        if (wpRt.photonExtrapolate && s_refreshQpc > 0 && s_lastVblankQpc) {
+            uint64_t nv = s_lastVblankQpc + (uint64_t)s_refreshQpc;
+            while (nv <= warpStartQpc) nv += (uint64_t)s_refreshQpc;
+            photonQpc = nv + (uint64_t)(s_refreshQpc / 2);   // vblank + ~half-frame mid-screen scanout
+            int64_t perMs = MouseTracker::MsToQpc(1.0f);
+            wpRt.photonLeadMs = perMs ? (float)((double)((int64_t)photonQpc - (int64_t)warpStartQpc) / (double)perMs) : 0.0f;
+        }
         WarpRenderer::Instance().ReprojectInto(s_presentQueue,
                                                frame, D3D12_RESOURCE_STATE_PRESENT,
                                                bb,    D3D12_RESOURCE_STATE_PRESENT,
@@ -371,7 +382,7 @@ void PresenterThread() {
                                                nullptr, DXGI_FORMAT_UNKNOWN,
                                                0.0f, fovV,
                                                nullptr, D3D12_RESOURCE_STATE_PRESENT,
-                                               submitQpc);
+                                               submitQpc, photonQpc);
         bb->Release();
 
         // Device-removal diagnostic: if the warp faulted the GPU, capture the reason once instead of

@@ -641,7 +641,7 @@ void ComputeCameraTranslation(ID3D12CommandQueue* queue, float yawDelta, float p
         double x[5];
         if (cnt > 60 && Solve5(A, b, x)) {
             float conf = (float)cnt / (float)(kFitGX * kFitGY);
-            const float a = 0.25f;   // EMA: translation is a per-game-frame velocity; light smoothing
+            const float a = 0.18f;   // EMA: translation is a per-game-frame velocity; smooth out fit noise
             // MV is a source displacement (old-new) = -(forward flow), so the solve recovers -T. Negate
             // to report the physical camera translation (x=right, y=up, z=forward all positive).
             s_camT[0] = s_camT[0]*(1-a) + (float)(-x[0])*a;
@@ -699,7 +699,12 @@ void ComputeCameraTranslation(ID3D12CommandQueue* queue, float yawDelta, float p
 }
 
 void GetCameraTranslation(float out3[3], float* confidence) {
-    if (out3) { out3[0] = s_camT[0]; out3[1] = s_camT[1]; out3[2] = s_camT[2]; }
+    // Soft deadzone: the fit floats around ~0.1-0.5 (and rarely spikes) when the camera is actually
+    // still. Subtracting a threshold zeroes that standing jitter (so the warp doesn't swim in place)
+    // while real motion (walk ~2, sprint ~5) passes through nearly untouched.
+    const float dz = 0.30f;
+    auto soft = [](float v, float t){ return v > t ? v - t : (v < -t ? v + t : 0.0f); };
+    if (out3) { out3[0] = soft(s_camT[0], dz); out3[1] = soft(s_camT[1], dz); out3[2] = soft(s_camT[2], dz); }
     if (confidence) *confidence = s_camConf;
 }
 

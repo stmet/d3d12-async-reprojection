@@ -274,14 +274,13 @@ void BuildUI() {
             ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.5f, 1.0f), "perspective rotational (fold-free, depth-independent)");
             if (wp.mode == 5) {
                 ImGui::TextColored(ImVec4(0.6f, 0.9f, 1.0f, 1.0f), "+ camera-translation parallax (Phase 3)");
-                ImGui::SliderFloat("parallax strength", &wp.parallaxStrength, -300.0f, 300.0f, "%.1f");
+                ImGui::SliderFloat("parallax strength", &wp.parallaxStrength, -2.0f, 2.0f, "%.3f");
                 ImGui::SameLine(); ImGui::TextDisabled("(?)");
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Scales the fitted camera-translation parallax. 0 = behaves exactly like\n"
-                                      "mode 4 (rotation only). For VALIDATION crank it high and strafe/walk WITH\n"
-                                      "NO mouse movement -- mode 2 is dead still then, so any motion you see is\n"
-                                      "the parallax working. Flip the sign if it goes the wrong way. Scale is\n"
-                                      "uncalibrated; once you find a visible value tell me and I'll bake a default.");
+                    ImGui::SetTooltip("Scales the fitted camera-translation parallax. 0 = mode 2 (rotation only).\n"
+                                      "The sweet spot is small (~0.1-0.4); higher tears the image. Strafe/walk\n"
+                                      "with NO mouse to judge it (mode 2 is static then). Flip the sign if the\n"
+                                      "world parallaxes the wrong way.");
                 ImGui::Text("camT X%+.4f Y%+.4f Z%+.4f  c%.2f", wp.camTx, wp.camTy, wp.camTz, wp.camTransConf);
             }
             ImGui::Checkbox("auto FOV (from FSR capture)", &wp.autoFov);

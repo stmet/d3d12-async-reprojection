@@ -89,7 +89,7 @@ const char* kReprojectShader =
 "float4 PSMain(VSOut i) : SV_Target {\n"
 "    float2 suv = i.uv;\n"
 "    if (gEnable != 0) {\n"
-"      if (gMode == 4 || gMode == 5) {\n"
+"      if (gMode == 1 || gMode == 2) {\n"
 "        // PERSPECTIVE rotational reprojection (depth-independent -> cannot fold). Reconstruct this\n"
 "        // pixel's view ray from the FOV, rotate it by the fresh mouse delta to find where that ray\n"
 "        // pointed in the frozen frame, and project back to UV. Reduces to a uniform shift at the\n"
@@ -108,7 +108,7 @@ const char* kReprojectShader =
 "        // space point from its depth, rotate it (reuse f = R*ray), add the fitted camera translation,\n"
 "        // and re-project. Near pixels (small Z) shift a lot, far pixels barely move -> real parallax.\n"
 "        // The rotational suv above is the Z->inf limit; this refines it using depth. Strength 0 = mode 4.\n"
-"        if (gMode == 5 && gParallax != 0.0f) {\n"
+"        if (gMode == 2 && gParallax != 0.0f) {\n"
 "            float dC = gDepth.SampleLevel(gPt, i.uv, 0).r;\n"
 "            float Zc = 1.0f / max(dC, 1e-4f);   // reversed-Z infinite-far: Z ~ 1/d (near/far not needed)\n"
 "            float3 Pf = f * Zc + float3(gCamTx, gCamTy, gCamTz) * gParallax;\n"
@@ -182,7 +182,7 @@ const char* kReprojectShader =
 "                if (dSrc > gNearCut) suv = i.uv;\n"
 "            }\n"
 "        }\n"
-"      } else if (gMode == 6) {\n"
+"      } else if (gMode == 3) {\n"
 "        // TRUE REPROJECTION (raymarch). Reconstruct the camera from FOV + the fitted rotation (mouse)\n"
 "        // and translation (MV fit) -- no engine matrices -- then march each output pixel's view ray\n"
 "        // through the FROZEN depth buffer to the first surface it hits. That is the geometrically\n"
@@ -252,62 +252,8 @@ const char* kReprojectShader =
 "            }\n"
 "            suv = hit ? puv : i.uv;                            // miss (disocclusion) -> un-warped world\n"
 "        }\n"
-"      } else if (gMode == 3) {\n"
-"        // TRUE reprojection. Every pixel is reprojected by its OWN motion vector, which already\n"
-"        // encodes the depth-correct geometric screen motion the engine computed (camera rotation +\n"
-"        // translation/parallax + object motion). No corner cancellation -> no translation shaking,\n"
-"        // and the camera-locked weapon (MV~0) simply stays put -> no ghost.\n"
-"        float2 mv = gMV.SampleLevel(gPt, i.uv, 0).rg * gMvScale;\n"
-"        float2 suvA = i.uv - mv * gMvFactor;            // forward-extrapolate this surface\n"
-"        // Add only the RESIDUAL of fresh mouse rotation the game's MV hasn't seen yet: the MV\n"
-"        // extrapolation already applied the game's last-frame rotation (~uniform = corner average),\n"
-"        // so subtract that and add the fresh mouse term to avoid double-counting camera rotation.\n"
-"        float2 g0 = gMV.SampleLevel(gPt, float2(0.04f, 0.04f), 0).rg;\n"
-"        float2 g1 = gMV.SampleLevel(gPt, float2(0.96f, 0.04f), 0).rg;\n"
-"        float2 g2 = gMV.SampleLevel(gPt, float2(0.04f, 0.96f), 0).rg;\n"
-"        float2 g3 = gMV.SampleLevel(gPt, float2(0.96f, 0.96f), 0).rg;\n"
-"        float2 cornerMV = (g0 + g1 + g2 + g3) * 0.25f * gMvScale;\n"
-"        float2 residualRot = gWarp + cornerMV * gMvFactor;\n"
-"        suv = saturate(suvA + residualRot);\n"
 "      } else {\n"
-"        // Mouse handles the CAMERA (responsive, late-latched on the CPU side).\n"
-"        suv = saturate(i.uv + gWarp);\n"
-"        if (gMode == 2) {\n"
-"            // MV handles moving OBJECTS only: subtract the camera's global MV (estimated from the\n"
-"            // frame corners) so static world cancels, reproject only the residual.\n"
-"            float dHere = gDepth.SampleLevel(gLin, i.uv, 0).r;\n"
-"            // Skip the near field entirely (reversed-Z: near plane -> high value). The first-person\n"
-"            // weapon is camera-locked (MV ~ 0) so it has a huge residual vs the world and would be\n"
-"            // falsely reprojected into a ghost/stencil of itself. Leave it on the pure camera warp.\n"
-"            if (dHere <= gNearCut) {\n"
-"                float2 localVel = gMV.SampleLevel(gPt, i.uv, 0).rg;\n"
-"                float2 g0 = gMV.SampleLevel(gPt, float2(0.04f, 0.04f), 0).rg;\n"
-"                float2 g1 = gMV.SampleLevel(gPt, float2(0.96f, 0.04f), 0).rg;\n"
-"                float2 g2 = gMV.SampleLevel(gPt, float2(0.04f, 0.96f), 0).rg;\n"
-"                float2 g3 = gMV.SampleLevel(gPt, float2(0.96f, 0.96f), 0).rg;\n"
-"                float2 globalVel = (g0 + g1 + g2 + g3) * 0.25f;\n"
-"                float2 residual = localVel - globalVel;\n"
-"                // Under camera TRANSLATION the corner estimate ignores parallax, so static near\n"
-"                // geometry shows a large false residual. Raise the 'is a moving object' bar in\n"
-"                // proportion to camera speed (gCamRejectK) to suppress that shaking.\n"
-"                float camMag = length(globalVel);\n"
-"                float thr = max(gMvThreshold, camMag * gCamRejectK);\n"
-"                if (dot(residual, residual) > thr * thr) {\n"
-"                    float2 disp = residual * gMvScale * gMvFactor;\n"
-"                    float dl = length(disp);\n"
-"                    if (dl > 0.06f) disp *= 0.06f / dl;   // clamp wild MV (disocclusion) from popping\n"
-"                    float2 src = saturate(suv - disp);\n"
-"                    float w = 1.0f;\n"
-"                    if (gDepthEdge != 0) {\n"
-"                        // Reproject only where the gather source is the SAME surface; at a moving-\n"
-"                        // object edge the source lands on background and raw reversed-Z depth jumps.\n"
-"                        float dThere = gDepth.SampleLevel(gLin, src, 0).r;\n"
-"                        w = 1.0f - saturate((abs(dHere - dThere) - gDepthEdgeThresh) / max(gDepthEdgeThresh, 1e-5f));\n"
-"                    }\n"
-"                    suv = lerp(suv, src, w);\n"
-"                }\n"
-"            }\n"
-"        }\n"
+"        suv = saturate(i.uv + gWarp);   // mode 0: flat UV shift (legacy fallback)\n"
 "      }\n"
 "    }\n"
 "    // HUD lock (applies last — UI is composited on top of everything). Keep screen-anchored UI from\n"
@@ -721,7 +667,7 @@ void WarpRenderer::WarpInto(ID3D12CommandQueue* queue,
     // still produces a clean resample (passthrough).
     float warpU = 0.0f, warpV = 0.0f;
     uint64_t now = MouseTracker::NowQpc();
-    if (s_params.enable && !s_params.runtimeSuppress) {
+    if (s_params.enable) {
         uint64_t base = WarpBaseQpc(frameSubmitQpc, now);
         long long cx, cy, bx, by;
         MouseTracker::GetAccAt(now, cx, cy);
@@ -792,10 +738,8 @@ void WarpRenderer::ReprojectInto(ID3D12CommandQueue* queue,
                                  ID3D12Resource* hud,   D3D12_RESOURCE_STATES hudState,
                                  uint64_t frameSubmitQpc, uint64_t presentTimeQpc) {
     if (!queue || !color || !dest) return;
-    // Modes 2/3 consume depth+MV; without them there is nothing to reproject — fall back to the
-    // uniform-shift path. Mode 4 (perspective rotational) is depth-independent and needs neither.
-    bool needsGeom = (s_params.mode == 2 || s_params.mode == 3);
-    if (needsGeom && (!depth || !mv)) { WarpInto(queue, color, srcState, dest, destState, frameSubmitQpc); return; }
+    // All live modes (0 flat, 1 perspective, 2 parallax, 3 true reprojection) work without MV; depth is
+    // optional and degrades gracefully (weapon-lock + parallax/raymarch auto-disable when it's null).
     if (!EnsureInit(dest)) return;
     if (!BuildReprojectPipeline()) { WarpInto(queue, color, srcState, dest, destState, frameSubmitQpc); return; }
 
@@ -818,7 +762,7 @@ void WarpRenderer::ReprojectInto(ID3D12CommandQueue* queue,
     // frame reference (base) stays anchored to the game frame. This deterministically removes the lead+
     // scanout-sized staleness. 0 = legacy (latch at now). MouseTracker extrapolates the few ms forward.
     uint64_t latch = presentTimeQpc ? presentTimeQpc : now;
-    bool effEnable = s_params.enable && !s_params.runtimeSuppress;
+    bool effEnable = s_params.enable;
     if (effEnable) {
         uint64_t base = WarpBaseQpc(frameSubmitQpc, now);
         long long cx, cy, bx, by;
@@ -856,6 +800,12 @@ void WarpRenderer::ReprojectInto(ID3D12CommandQueue* queue,
     const float effWeaponDilate = ads ? s_params.adsWeaponDilate : s_params.weaponDilate;
     const float effMaskDilate   = ads ? s_params.adsMaskDilate : s_params.maskDilate;
 
+    // Optic fix: a see-through optic is at world depth, so true reprojection (mode 3) makes the through-
+    // glass view swim while aiming. Aiming is mostly rotation, so during ADS route mode 3 through the
+    // proven-stable perspective-rotational path (mode 1) — same behavior the optic was steady under.
+    UINT effMode = (UINT)s_params.mode;
+    if (s_params.mode == 3 && ads && s_params.adsRotationOnly) effMode = 1;
+
     struct RPConsts {
         float warpU, warpV;
         float mvScaleX, mvScaleY;
@@ -888,7 +838,7 @@ void WarpRenderer::ReprojectInto(ID3D12CommandQueue* queue,
         s_params.mvThreshold,
         s_params.depthEdgeThresh,
         s_params.depthEdge ? 1u : 0u,
-        (UINT)s_params.mode,
+        effMode,
         effEnable ? 1u : 0u,
         effNearCut, s_params.camRejectK,
         tanHalfV, aspect, yaw, pitch,
@@ -903,8 +853,7 @@ void WarpRenderer::ReprojectInto(ID3D12CommandQueue* queue,
         s_params.edgeFade,
         effMaskDilate,
         s_params.camTx, s_params.camTy, s_params.camTz,
-        (s_params.mode == 6) ? ((s_params.adsActive && s_params.adsRotationOnly) ? 0.0f : s_params.reprojScale)
-                             : (s_params.mode == 5) ? s_params.parallaxStrength : 0.0f,
+        (s_params.mode == 3) ? s_params.reprojScale : (s_params.mode == 2) ? s_params.parallaxStrength : 0.0f,
         s_params.camNearZ, s_params.camFarZ,
         (UINT)(s_params.raySteps < 1 ? 1 : s_params.raySteps)
     };

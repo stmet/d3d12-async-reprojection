@@ -49,7 +49,7 @@ void PickDepthFormats(DXGI_FORMAT f, DXGI_FORMAT* tex, DXGI_FORMAT* srv) {
         case DXGI_FORMAT_D32_FLOAT: case DXGI_FORMAT_R32_TYPELESS: case DXGI_FORMAT_R32_FLOAT:
             *tex = DXGI_FORMAT_R32_TYPELESS; *srv = DXGI_FORMAT_R32_FLOAT; break;
         // 64-bit depth+stencil (Cyberpunk: D32_FLOAT_S8X24 / R32G8X24_TYPELESS = 19). SRV reads the
-        // R32 depth plane via R32_FLOAT_X8X24_TYPELESS — a typeless SRV format is INVALID and removes
+        // R32 depth plane via R32_FLOAT_X8X24_TYPELESS â€” a typeless SRV format is INVALID and removes
         // the device.
         case DXGI_FORMAT_R32G8X24_TYPELESS: case DXGI_FORMAT_D32_FLOAT_S8X24_UINT:
             *tex = DXGI_FORMAT_R32G8X24_TYPELESS; *srv = DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS; break;
@@ -175,7 +175,7 @@ void HookFfxModule(HMODULE mod) {
     }
 }
 
-// ---- native FSR3 SDK dispatch detours (FSR 3.0 — Cyberpunk's path) ----
+// ---- native FSR3 SDK dispatch detours (FSR 3.0 â€” Cyberpunk's path) ----
 // Take the desc as void* and cast to the layout matching each entry point (they differ: the combined
 // FSR3-context dispatch has 7 resources, the decoupled upscaler has 10).
 typedef int (WINAPI* PFN_Fsr3Dispatch)(void*, const void*);
@@ -266,96 +266,6 @@ HMODULE WINAPI hkLoadLibraryExW(LPCWSTR name, HANDLE f, DWORD flags) {
     HMODULE m = o_LoadLibraryExW(name, f, flags);
     MaybeHook(name, m);
     return m;
-}
-
-// ---- ADS-by-depth-profile: count near-field samples in a center-lower region of the depth ----
-constexpr UINT kCovRing = 4;
-constexpr UINT kCovGridX = 24, kCovGridY = 20;     // 480 samples over the ROI
-ID3D12RootSignature*       s_covRoot = nullptr;
-ID3D12PipelineState*       s_covPso  = nullptr;
-ID3D12DescriptorHeap*      s_covHeap = nullptr;     // [0]=SRV depth, [1]=UAV count
-ID3D12Resource*            s_covCount = nullptr;    // DEFAULT, 1 uint (UAV)
-ID3D12Resource*            s_covReadback = nullptr; // READBACK, kCovRing uints
-UINT*                      s_covMapped = nullptr;
-ID3D12CommandAllocator*    s_covAlloc[kCovRing] = {};
-ID3D12GraphicsCommandList* s_covList = nullptr;
-ID3D12Fence*               s_covFence = nullptr;
-UINT64                     s_covVal = 0;
-UINT64                     s_covSlotFence[kCovRing] = {};
-UINT                       s_covIdx = 0;
-UINT                       s_covInc = 0;
-bool                       s_covInit = false, s_covFailed = false;
-float                      s_coverage = 0.0f;
-
-const char* kCoverageCS =
-"Texture2D<float>      gDepth : register(t0);\n"
-"RWByteAddressBuffer   gOut   : register(u0);\n"
-"SamplerState          gPt   : register(s0);\n"
-"cbuffer P : register(b0) { float gNearCut; float gX0; float gX1; float gY0; float gY1; uint gGX; uint gGY; uint gPad; };\n"
-"[numthreads(1,1,1)]\n"
-"void CSMain() {\n"
-"    uint n = 0; float dmax = 0.0f;\n"
-"    [loop] for (uint y = 0; y < gGY; ++y)\n"
-"      [loop] for (uint x = 0; x < gGX; ++x) {\n"
-"          float2 uv = float2(gX0 + (x + 0.5f) / gGX * (gX1 - gX0), gY0 + (y + 0.5f) / gGY * (gY1 - gY0));\n"
-"          float d = gDepth.SampleLevel(gPt, uv, 0);\n"
-"          dmax = max(dmax, d);\n"
-"          if (d > gNearCut) ++n;\n"
-"      }\n"
-"    gOut.Store(0, n);\n"
-"    gOut.Store(4, asuint(dmax));\n"   // debug: max depth seen in the ROI
-"}\n";
-
-bool BuildCoveragePipeline() {
-    if (s_covInit) return true;
-    if (s_covFailed || !s_device) return false;
-
-    // Separate descriptor tables for SRV and UAV (most robust), each starting at its own bound handle.
-    D3D12_DESCRIPTOR_RANGE rSrv = {}; rSrv.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV; rSrv.NumDescriptors = 1; rSrv.BaseShaderRegister = 0;
-    D3D12_DESCRIPTOR_RANGE rUav = {}; rUav.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV; rUav.NumDescriptors = 1; rUav.BaseShaderRegister = 0;
-    D3D12_ROOT_PARAMETER p[3] = {};
-    p[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; p[0].DescriptorTable.NumDescriptorRanges = 1; p[0].DescriptorTable.pDescriptorRanges = &rSrv;
-    p[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; p[1].DescriptorTable.NumDescriptorRanges = 1; p[1].DescriptorTable.pDescriptorRanges = &rUav;
-    p[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS; p[2].Constants.ShaderRegister = 0; p[2].Constants.Num32BitValues = 8;
-    D3D12_STATIC_SAMPLER_DESC samp = {};
-    samp.Filter = D3D12_FILTER_MIN_MAG_MIP_POINT; samp.AddressU = samp.AddressV = samp.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-    D3D12_ROOT_SIGNATURE_DESC rs = {}; rs.NumParameters = 3; rs.pParameters = p; rs.NumStaticSamplers = 1; rs.pStaticSamplers = &samp;
-    ID3DBlob* sig = nullptr; ID3DBlob* err = nullptr;
-    if (FAILED(D3D12SerializeRootSignature(&rs, D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err))) { if (sig) sig->Release(); if (err) err->Release(); s_covFailed = true; return false; }
-    HRESULT hr = s_device->CreateRootSignature(0, sig->GetBufferPointer(), sig->GetBufferSize(), IID_PPV_ARGS(&s_covRoot));
-    sig->Release(); if (err) err->Release();
-    if (FAILED(hr)) { s_covFailed = true; return false; }
-    ID3DBlob* cs = nullptr; ID3DBlob* e1 = nullptr;
-    if (FAILED(D3DCompile(kCoverageCS, strlen(kCoverageCS), nullptr, nullptr, nullptr, "CSMain", "cs_5_0", 0, 0, &cs, &e1))) {
-        LOG_ERROR("DepthCapture: coverage CS compile failed: %s", e1 ? (char*)e1->GetBufferPointer() : "?");
-        if (cs) cs->Release(); if (e1) e1->Release(); s_covFailed = true; return false;
-    }
-    D3D12_COMPUTE_PIPELINE_STATE_DESC cp = {}; cp.pRootSignature = s_covRoot; cp.CS = { cs->GetBufferPointer(), cs->GetBufferSize() };
-    hr = s_device->CreateComputePipelineState(&cp, IID_PPV_ARGS(&s_covPso)); cs->Release(); if (e1) e1->Release();
-    if (FAILED(hr)) { s_covFailed = true; return false; }
-
-    D3D12_DESCRIPTOR_HEAP_DESC hd = {}; hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV; hd.NumDescriptors = 2; hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-    if (FAILED(s_device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&s_covHeap)))) { s_covFailed = true; return false; }
-    s_covInc = s_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-
-    D3D12_HEAP_PROPERTIES dh = {}; dh.Type = D3D12_HEAP_TYPE_DEFAULT;
-    D3D12_RESOURCE_DESC bd = {}; bd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER; bd.Width = 2 * sizeof(UINT); bd.Height = 1; bd.DepthOrArraySize = 1; bd.MipLevels = 1; bd.SampleDesc.Count = 1; bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR; bd.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-    if (FAILED(s_device->CreateCommittedResource(&dh, D3D12_HEAP_FLAG_NONE, &bd, D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&s_covCount)))) { s_covFailed = true; return false; }
-    D3D12_HEAP_PROPERTIES rh = {}; rh.Type = D3D12_HEAP_TYPE_READBACK;
-    D3D12_RESOURCE_DESC rd = {}; rd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER; rd.Width = 2 * sizeof(UINT) * kCovRing; rd.Height = 1; rd.DepthOrArraySize = 1; rd.MipLevels = 1; rd.SampleDesc.Count = 1; rd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-    if (FAILED(s_device->CreateCommittedResource(&rh, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&s_covReadback)))) { s_covFailed = true; return false; }
-    D3D12_RANGE none = { 0, 0 }; s_covReadback->Map(0, &none, (void**)&s_covMapped);
-
-    // DIRECT type: this runs on the present (direct) queue, which cannot execute a COMPUTE-type list.
-    // A direct command list can still record compute dispatches.
-    for (UINT i = 0; i < kCovRing; ++i)
-        if (FAILED(s_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&s_covAlloc[i])))) { s_covFailed = true; return false; }
-    if (FAILED(s_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, s_covAlloc[0], nullptr, IID_PPV_ARGS(&s_covList)))) { s_covFailed = true; return false; }
-    s_covList->Close();
-    s_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&s_covFence));
-    s_covInit = true;
-    LOG_INFO("DepthCapture: ADS coverage pipeline built");
-    return true;
 }
 
 // ---- Phase 3: global camera-translation least-squares fit from the MV field ----
@@ -554,64 +464,6 @@ bool GetMvSRV(ID3D12Resource** tex, DXGI_FORMAT* srvFmt) {
     if (tex)    *tex    = s_mvCopy;
     if (srvFmt) *srvFmt = s_mvSrvFmt;
     return true;
-}
-
-float GetNearCoverage() { return s_coverage; }
-
-void ComputeNearCoverage(ID3D12CommandQueue* queue, float nearCut) {
-    ID3D12Resource* depthTex = nullptr; DXGI_FORMAT srvFmt = DXGI_FORMAT_UNKNOWN;
-    { std::lock_guard<std::mutex> lk(s_mtx); depthTex = s_depthCopy; srvFmt = s_srvFmt; }
-    if (!queue || !depthTex) return;
-    if (!BuildCoveragePipeline()) return;
-
-    UINT slot = s_covIdx % kCovRing;
-    // Read this slot's result from kCovRing dispatches ago (complete by now). 2 uints/slot: count, dmaxBits.
-    if (s_covSlotFence[slot] != 0 && s_covFence->GetCompletedValue() >= s_covSlotFence[slot]) {
-        UINT cnt = s_covMapped[slot * 2];
-        s_coverage = (float)cnt / (float)(kCovGridX * kCovGridY);
-        static int dbg = 0;
-        if ((dbg++ % 120) == 0) {
-            UINT db = s_covMapped[slot * 2 + 1]; float dmax = *(float*)&db;
-            LOG_INFO("DepthCapture: coverage=%.0f%% (near=%u/%u) roiMaxDepth=%.4f nearCut=%.3f",
-                     s_coverage * 100.0f, cnt, kCovGridX * kCovGridY, dmax, nearCut);
-        }
-    }
-
-    // Descriptors: [0]=SRV depth, [1]=UAV count.
-    D3D12_CPU_DESCRIPTOR_HANDLE cpu = s_covHeap->GetCPUDescriptorHandleForHeapStart();
-    D3D12_GPU_DESCRIPTOR_HANDLE gpu = s_covHeap->GetGPUDescriptorHandleForHeapStart();
-    D3D12_SHADER_RESOURCE_VIEW_DESC sv = {};
-    sv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D; sv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    sv.Format = srvFmt; sv.Texture2D.MipLevels = 1;
-    s_device->CreateShaderResourceView(depthTex, &sv, cpu);
-    D3D12_CPU_DESCRIPTOR_HANDLE uavCpu = cpu; uavCpu.ptr += s_covInc;
-    D3D12_GPU_DESCRIPTOR_HANDLE uavGpu = gpu; uavGpu.ptr += s_covInc;
-    D3D12_UNORDERED_ACCESS_VIEW_DESC uav = {};
-    uav.ViewDimension = D3D12_UAV_DIMENSION_BUFFER; uav.Format = DXGI_FORMAT_R32_TYPELESS;
-    uav.Buffer.FirstElement = 0; uav.Buffer.NumElements = 2; uav.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
-    s_device->CreateUnorderedAccessView(s_covCount, nullptr, &uav, uavCpu);
-
-    s_covAlloc[slot]->Reset();
-    s_covList->Reset(s_covAlloc[slot], s_covPso);
-    Barrier(s_covList, s_covCount, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    s_covList->SetComputeRootSignature(s_covRoot);
-    ID3D12DescriptorHeap* heaps[] = { s_covHeap };
-    s_covList->SetDescriptorHeaps(1, heaps);
-    s_covList->SetComputeRootDescriptorTable(0, gpu);      // SRV (depth)
-    s_covList->SetComputeRootDescriptorTable(1, uavGpu);   // UAV (count)
-    struct { float nearCut, x0, x1, y0, y1; UINT gx, gy, pad; } c =
-        { nearCut, 0.35f, 0.65f, 0.40f, 0.92f, kCovGridX, kCovGridY, 0 };
-    s_covList->SetComputeRoot32BitConstants(2, 8, &c, 0);
-    s_covList->Dispatch(1, 1, 1);
-    Barrier(s_covList, s_covCount, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
-    s_covList->CopyBufferRegion(s_covReadback, (UINT64)slot * 2 * sizeof(UINT), s_covCount, 0, 2 * sizeof(UINT));
-    Barrier(s_covList, s_covCount, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON);
-    s_covList->Close();
-    ID3D12CommandList* lists[] = { s_covList };
-    queue->ExecuteCommandLists(1, lists);
-    s_covSlotFence[slot] = ++s_covVal;
-    queue->Signal(s_covFence, s_covVal);
-    s_covIdx++;
 }
 
 void ComputeCameraTranslation(ID3D12CommandQueue* queue, float yawDelta, float pitchDelta, float nearCut) {

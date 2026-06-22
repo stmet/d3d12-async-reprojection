@@ -312,25 +312,19 @@ void PresenterThread() {
         // Re-warp the freshest GPU-complete game frame (the replacement buffer the game rendered into)
         // with freshly late-latched mouse input, DIRECTLY into the real backbuffer — no capture copies,
         // no export ring. Mode 4 (perspective rotational) needs no depth/MV; FOV is the manual value.
-        // Menu detection: suppress the warp (passthrough) in menus/pause (OS cursor visible) — there's
-        // no camera motion to hide and warping would just swim the UI.
         WarpParams& wpRt = WarpRenderer::Params();
-        bool menuSuppress = wpRt.menuDetect && Overlay::InGameMenu();
 
         // Captured vertical FOV (radians) from the FSR dispatch. Drives auto-FOV (so the warp + angular
-        // gain track the game's real/zoomed FOV) and FOV-based ADS detection. Sanity-guarded so junk
-        // capture falls back to the manual FOV and never breaks the warp.
+        // gain track the game's real/zoomed FOV). Sanity-guarded so junk capture falls back to manual FOV.
         DepthCapture::Cam cam; bool haveCam = DepthCapture::GetLatest(nullptr, nullptr, &cam);
         float capFov = haveCam ? cam.fovV : 0.0f;
         bool  fovSane = (capFov > 0.30f && capFov < 2.60f);   // ~17deg .. ~149deg
         wpRt.capturedFovDeg = fovSane ? capFov * 57.29578f : 0.0f;
         if (haveCam) { wpRt.camNearZ = cam.nearZ; wpRt.camFarZ = cam.farZ; }  // display only (reversed-Z 1/d)
 
-        // ADS detection: hold-right-mouse is the aim intent (FOV is constant on aim and depth-coverage
-        // can't separate hip/ADS here — both proven). Swaps to the ADS lock profile below.
-        wpRt.runtimeSuppress = menuSuppress;
+        // ADS detection: hold-right-mouse is the aim intent. Swaps to the ADS lock profile below.
         wpRt.adsActive = wpRt.adsForce ||
-            (wpRt.adsDetect && !menuSuppress && (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0);
+            (wpRt.adsDetect && (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0);
 
         float fovV = (wpRt.autoFov && fovSane) ? capFov : (wpRt.fovDeg * 3.14159265f / 180.0f);
         // Phase 1: feed the captured depth so mode-4 weapon/hand lock can keep the near-field

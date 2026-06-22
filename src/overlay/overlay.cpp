@@ -216,11 +216,11 @@ void BuildUI() {
         ImGui::Checkbox("Enable warp", &wp.enable);
         // Lean build captures no depth/MV, so only the two geometry-free warps are live: a flat UV
         // shift (mode 0) and the FOV-correct perspective rotation (mode 4, the default).
-        int modeIdx = (wp.mode == 6) ? 3 : (wp.mode == 5) ? 2 : (wp.mode == 4) ? 1 : 0;
-        if (ImGui::Combo("mode", &modeIdx,
-                "1: Rotational shift\0""2: Perspective rotational\0""3: Perspective + parallax\0"
-                "4: True reprojection (raymarch)\0"))
-            wp.mode = (modeIdx == 3) ? 6 : (modeIdx == 2) ? 5 : (modeIdx == 1) ? 4 : 0;
+        // Modes are 0..3 (internal == this list), so the combo index IS wp.mode.
+        if (wp.mode < 0 || wp.mode > 3) wp.mode = 1;
+        ImGui::Combo("mode", &wp.mode,
+                "0: Rotational shift\0""1: Perspective rotational\0""2: Perspective + parallax\0"
+                "3: True reprojection (raymarch)\0");
         // ---- gain: angular model (FOV-correct deg/count, the lean default) vs legacy flat UV gain ----
         ImGui::Checkbox("angular gain (FOV-correct deg/count)", &wp.angularGain);
         ImGui::SameLine(); ImGui::TextDisabled("(?)");
@@ -260,20 +260,9 @@ void BuildUI() {
         ImGui::SameLine();
         ImGui::Text("sign %+.0f    warp UV %.4f, %.4f", wp.sign, wp.lastU, wp.lastV);
 
-        ImGui::Checkbox("auto-suppress in menus", &wp.menuDetect);
-        ImGui::SameLine();
-        if (wp.menuDetect)
-            ImGui::TextColored(wp.runtimeSuppress ? ImVec4(1.0f, 0.7f, 0.2f, 1.0f) : ImVec4(0.4f, 1.0f, 0.5f, 1.0f),
-                               wp.runtimeSuppress ? "[MENU: warp off]" : "[gameplay]");
-        ImGui::SameLine(); ImGui::TextDisabled("(?)");
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Detects menus/pause/inventory via the game's cursor-clip state and turns the\n"
-                              "warp off there (the camera isn't moving, so warping just swims the UI). Turn\n"
-                              "off if a game doesn't clip the cursor during normal gameplay.");
-
-        if (wp.mode == 4 || wp.mode == 5 || wp.mode == 6) {
+        if (wp.mode == 1 || wp.mode == 2 || wp.mode == 3) {
             ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.5f, 1.0f), "perspective rotational (fold-free, depth-independent)");
-            if (wp.mode == 6) {
+            if (wp.mode == 3) {
                 ImGui::TextColored(ImVec4(0.6f, 0.9f, 1.0f, 1.0f), "+ true reprojection (raymarch frozen depth)");
                 ImGui::SliderFloat("translation scale", &wp.reprojScale, -0.20f, 0.20f, "%.4f");
                 ImGui::SameLine(); ImGui::TextDisabled("(?)");
@@ -295,7 +284,7 @@ void BuildUI() {
                                       "mostly rotation, so this steadies the optic at no real cost.");
                 ImGui::Text("camT X%+.4f Y%+.4f Z%+.4f  c%.2f", wp.camTx, wp.camTy, wp.camTz, wp.camTransConf);
             }
-            if (wp.mode == 5) {
+            if (wp.mode == 2) {
                 ImGui::TextColored(ImVec4(0.6f, 0.9f, 1.0f, 1.0f), "+ camera-translation parallax (Phase 3)");
                 ImGui::SliderFloat("parallax strength", &wp.parallaxStrength, -2.0f, 2.0f, "%.3f");
                 ImGui::SameLine(); ImGui::TextDisabled("(?)");
@@ -612,15 +601,6 @@ void SetPresentQueue(ID3D12CommandQueue* queue) {
 }
 
 ID3D12CommandQueue* GetPresentQueue() { return s_queue; }
-
-bool InGameMenu() {
-    // Our own tuning overlay forces the cursor visible — that's not a game menu; keep the warp running.
-    if (s_visible) return false;
-    // Gameplay hides the OS cursor (mouselook); menus/pause/inventory/dialogue show it.
-    CURSORINFO ci = { sizeof(CURSORINFO) };
-    if (GetCursorInfo(&ci)) return (ci.flags & CURSOR_SHOWING) != 0;
-    return false;
-}
 
 void RenderOverlay(IDXGISwapChain* swapchain) {
     if (!EnsureInit(swapchain))

@@ -620,9 +620,11 @@ void ComputeCameraTranslation(ID3D12CommandQueue* queue, float yawDelta, float p
         if (cnt > 60 && Solve3(A, b, x)) {
             float conf = (float)cnt / (float)(kFitGX * kFitGY);
             const float a = 0.25f;   // EMA: translation is a per-game-frame velocity; light smoothing
-            s_camT[0] = s_camT[0]*(1-a) + (float)x[0]*a;
-            s_camT[1] = s_camT[1]*(1-a) + (float)x[1]*a;
-            s_camT[2] = s_camT[2]*(1-a) + (float)x[2]*a;
+            // MV is a source displacement (old-new) = -(forward flow), so the solve recovers -T. Negate
+            // to report the physical camera translation (x=right, y=up, z=forward all positive).
+            s_camT[0] = s_camT[0]*(1-a) + (float)(-x[0])*a;
+            s_camT[1] = s_camT[1]*(1-a) + (float)(-x[1])*a;
+            s_camT[2] = s_camT[2]*(1-a) + (float)(-x[2])*a;
             s_camConf = s_camConf*(1-a) + conf*a;
             static int dbg = 0;
             if ((dbg++ % 120) == 0)

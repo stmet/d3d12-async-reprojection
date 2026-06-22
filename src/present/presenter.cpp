@@ -339,11 +339,25 @@ void PresenterThread() {
         DepthCapture::GetDepthSRV(&depthTex, &depthFmt);
 
         // Phase 3 (MV-as-sensor): estimate the global camera translation from the MV field each present.
-        // v1 fits RAW MV (yaw/pitch = 0) so it's validated with a no-look strafe/walk; rotation removal
-        // and mode-5 parallax consumption come next. This is just a readout for now — it doesn't touch
-        // the warped image, so it can't break what we have.
+        // The MV mixes rotation + translation; we feed it the game's per-game-frame rotation (mouse
+        // counts between the two most recent frame submits, same angular model as the mode-4 warp) so the
+        // predicted rotational flow is removed and only the translation parallax remains. Still a readout
+        // only — it doesn't touch the warped image, so it can't break what we have.
         if (wpRt.parallaxFit) {
-            DepthCapture::ComputeCameraTranslation(s_presentQueue, 0.0f, 0.0f,
+            static uint64_t prevSubmitQpc = 0;
+            static float gfYaw = 0.0f, gfPitch = 0.0f;
+            if (submitQpc && submitQpc != prevSubmitQpc) {
+                if (prevSubmitQpc) {
+                    long long cx, cy, bx, by;
+                    MouseTracker::GetAccAt(submitQpc, cx, cy);
+                    MouseTracker::GetAccAt(prevSubmitQpc, bx, by);
+                    const float radPerCount = wpRt.sensDegPer1000 * (3.14159265f / 180.0f) / 1000.0f;
+                    gfYaw   = (float)(cx - bx) * radPerCount * wpRt.sign;
+                    gfPitch = (float)(cy - by) * radPerCount * wpRt.sign * wpRt.pitchRatio;
+                }
+                prevSubmitQpc = submitQpc;
+            }
+            DepthCapture::ComputeCameraTranslation(s_presentQueue, gfYaw, gfPitch,
                                                    wpRt.adsActive ? wpRt.adsNearCut : wpRt.nearDepthCut);
             float t[3] = {0,0,0}; float conf = 0.0f;
             DepthCapture::GetCameraTranslation(t, &conf);

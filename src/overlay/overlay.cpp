@@ -334,6 +334,24 @@ void BuildUI() {
                 ImGui::SliderFloat("ADS mask dilate",  &wp.adsMaskDilate, 0.0f, 0.02f, "%.4f");
                 ImGui::SliderFloat("ADS optic fill",   &wp.adsWeaponDilate,0.0f, 0.15f,"%.3f");
             }
+
+            // ---- Phase 3 (MV-as-sensor): camera-translation parallax — SENSOR VALIDATION ----
+            // The fit estimates the global camera translation from the MV field. Right now it's a
+            // read-only sensor (no warp consumption yet). Validate it: strafe/walk WITHOUT moving the
+            // mouse and watch X (strafe) / Z (forward) move; mouse-look alone should keep it ~0.
+            ImGui::Spacing();
+            ImGui::TextColored(ImVec4(0.6f, 0.9f, 1.0f, 1.0f), "parallax sensor (Phase 3, readout only)");
+            ImGui::Checkbox("fit camera translation from MV", &wp.parallaxFit);
+            ImGui::SameLine(); ImGui::TextDisabled("(?)");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Solves a global camera translation from the motion-vector field each\n"
+                                  "frame (depth-weighted least-squares). No warp yet -- this just proves\n"
+                                  "the sensor. Test: strafe/walk with NO mouse movement -> X/Z should\n"
+                                  "track your motion; pure mouse-look -> stays near zero.");
+            if (wp.parallaxFit) {
+                ImGui::Text("camT  X %+.4f  Y %+.4f  Z %+.4f", wp.camTx, wp.camTy, wp.camTz);
+                ImGui::Text("fit confidence %.2f", wp.camTransConf);
+            }
         }
 
         if (Presenter::AsyncEnabled()) {

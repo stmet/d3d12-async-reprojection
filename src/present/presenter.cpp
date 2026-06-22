@@ -337,6 +337,18 @@ void PresenterThread() {
         // in which case the warp falls back to pure rotation (weapon-lock auto-off).
         ID3D12Resource* depthTex = nullptr; DXGI_FORMAT depthFmt = DXGI_FORMAT_UNKNOWN;
         DepthCapture::GetDepthSRV(&depthTex, &depthFmt);
+
+        // Phase 3 (MV-as-sensor): estimate the global camera translation from the MV field each present.
+        // v1 fits RAW MV (yaw/pitch = 0) so it's validated with a no-look strafe/walk; rotation removal
+        // and mode-5 parallax consumption come next. This is just a readout for now — it doesn't touch
+        // the warped image, so it can't break what we have.
+        if (wpRt.parallaxFit) {
+            DepthCapture::ComputeCameraTranslation(s_presentQueue, 0.0f, 0.0f,
+                                                   wpRt.adsActive ? wpRt.adsNearCut : wpRt.nearDepthCut);
+            float t[3] = {0,0,0}; float conf = 0.0f;
+            DepthCapture::GetCameraTranslation(t, &conf);
+            wpRt.camTx = t[0]; wpRt.camTy = t[1]; wpRt.camTz = t[2]; wpRt.camTransConf = conf;
+        }
         WarpRenderer::Instance().ReprojectInto(s_presentQueue,
                                                frame, D3D12_RESOURCE_STATE_PRESENT,
                                                bb,    D3D12_RESOURCE_STATE_PRESENT,

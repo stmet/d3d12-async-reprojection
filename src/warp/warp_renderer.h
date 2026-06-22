@@ -111,6 +111,13 @@ struct WarpParams {
     bool  hudCompose  = true;    // false = skip hud-less separation, warp the final frame as one layer
                                  // (HUD swims, but no mask/ghost) — clean low-latency baseline.
 
+    // ---- Phase 3 (MV-as-sensor) parallax: readouts of the fitted GLOBAL camera translation (the warp
+    // consumption is mode 5, added next). camT* are view-space units per game-frame (x=right, y=up,
+    // z=forward); parallaxOn gates the fit running each present. ----
+    bool  parallaxFit  = true;     // run the per-present MV->translation fit (cheap; just a readout for now)
+    float camTx = 0.0f, camTy = 0.0f, camTz = 0.0f;  // fitted camera translation (per game-frame)
+    float camTransConf = 0.0f;     // 0..1 fit confidence (inlier sample fraction)
+
     // Filled by the renderer for the overlay HUD.
     float lastU = 0.0f, lastV = 0.0f;   // last rotational offset (UV)
     float lastMvFactor = 0.0f;          // last MV extrapolation factor (game-frames into the future)

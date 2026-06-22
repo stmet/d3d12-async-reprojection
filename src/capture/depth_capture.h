@@ -42,4 +42,22 @@ bool GetDepthSRV(ID3D12Resource** tex, DXGI_FORMAT* srvFmt);
 void  ComputeNearCoverage(ID3D12CommandQueue* queue, float nearCut);
 float GetNearCoverage();   // 0..1, latest available (a few frames latent)
 
+// Our stable copy of the latest motion-vector field (render res, SIMULTANEOUS_ACCESS) for the camera-
+// translation fit. Returns false until the first copy. MV is a concrete color format (e.g. R16G16_FLOAT).
+bool GetMvSRV(ID3D12Resource** tex, DXGI_FORMAT* srvFmt);
+
+// ---- Phase 3 (MV-as-sensor): global camera-translation estimate ----
+// The MV field encodes per-pixel screen motion = camera rotation + camera translation (parallax) +
+// object motion. We DON'T warp it per-pixel (that's the "soup"); instead we use it once per frame as a
+// low-dim sensor: subtract the known rotational flow, then solve a depth-weighted least-squares for the
+// single 3D camera translation that best explains the residual parallax (near pixels move more than far
+// — that depth dependence is what makes the 3 unknowns observable). Pass the game's per-present rotation
+// delta (radians) to remove rotation; pass 0,0 to fit RAW MV (validate first with a no-look strafe/walk).
+// Runs once per present on the present (direct) queue; result is read back a few frames latent (no stall).
+// nearCut = reversed-Z near threshold (excludes the weapon). Camera near/far/FOV come from the capture.
+void ComputeCameraTranslation(ID3D12CommandQueue* queue, float yawDelta, float pitchDelta, float nearCut);
+// Latest fitted translation (view-space, units per game-frame: x=right, y=up, z=forward) and a 0..1
+// confidence (ramps with the inlier sample count). xyz stay 0 until the first solve.
+void GetCameraTranslation(float out3[3], float* confidence);
+
 } // namespace DepthCapture

@@ -216,9 +216,9 @@ void BuildUI() {
         ImGui::Checkbox("Enable warp", &wp.enable);
         // Lean build captures no depth/MV, so only the two geometry-free warps are live: a flat UV
         // shift (mode 0) and the FOV-correct perspective rotation (mode 4, the default).
-        int modeIdx = (wp.mode == 4) ? 1 : 0;
-        if (ImGui::Combo("mode", &modeIdx, "Rotational shift\0Perspective rotational\0"))
-            wp.mode = (modeIdx == 1) ? 4 : 0;
+        int modeIdx = (wp.mode == 5) ? 2 : (wp.mode == 4) ? 1 : 0;
+        if (ImGui::Combo("mode", &modeIdx, "Rotational shift\0Perspective rotational\0Perspective + parallax\0"))
+            wp.mode = (modeIdx == 2) ? 5 : (modeIdx == 1) ? 4 : 0;
         // ---- gain: angular model (FOV-correct deg/count, the lean default) vs legacy flat UV gain ----
         ImGui::Checkbox("angular gain (FOV-correct deg/count)", &wp.angularGain);
         ImGui::SameLine(); ImGui::TextDisabled("(?)");
@@ -269,8 +269,19 @@ void BuildUI() {
                               "warp off there (the camera isn't moving, so warping just swims the UI). Turn\n"
                               "off if a game doesn't clip the cursor during normal gameplay.");
 
-        if (wp.mode == 4) {
+        if (wp.mode == 4 || wp.mode == 5) {
             ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.5f, 1.0f), "perspective rotational (fold-free, depth-independent)");
+            if (wp.mode == 5) {
+                ImGui::TextColored(ImVec4(0.6f, 0.9f, 1.0f, 1.0f), "+ camera-translation parallax (Phase 3)");
+                ImGui::SliderFloat("parallax strength", &wp.parallaxStrength, -60.0f, 60.0f, "%.1f");
+                ImGui::SameLine(); ImGui::TextDisabled("(?)");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Scales the fitted camera-translation parallax. 0 = behaves exactly like\n"
+                                      "mode 4 (rotation only). Ramp up slowly: near objects should slide against\n"
+                                      "far ones as you strafe/walk. Flip the sign if the world parallaxes the\n"
+                                      "wrong way. Absolute scale is uncalibrated, so tune by eye.");
+                ImGui::Text("camT X%+.4f Y%+.4f Z%+.4f  c%.2f", wp.camTx, wp.camTy, wp.camTz, wp.camTransConf);
+            }
             ImGui::Checkbox("auto FOV (from FSR capture)", &wp.autoFov);
             ImGui::SameLine();
             if (wp.capturedFovDeg > 0.0f) ImGui::Text("captured %.1f deg", wp.capturedFovDeg);

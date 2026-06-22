@@ -74,6 +74,9 @@ const char* kReprojectShader =
 "    float  gEdgeFade;       // disocclusion fade: UV width over which out-of-frame samples ramp to black (0=off)\n"
 "    float  gMaskDilate;     // weapon-lock near-mask dilation radius (UV); grows the gun mask to cover the\n"
 "                            // soft render-res depth silhouette edge (kills the ghost outline)\n"
+"    float  gCamTx; float gCamTy; float gCamTz;  // mode 5: fitted camera translation (view space)\n"
+"    float  gParallax;       // mode 5: parallax strength (0 = off; folds sign + scale)\n"
+"    float  gNearZ; float gFarZ;                 // mode 5: depth linearization (reversed-Z near/far)\n"
 "};\n"
 "struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; };\n"
 "VSOut VSMain(uint id : SV_VertexID) {\n"
@@ -85,7 +88,7 @@ const char* kReprojectShader =
 "float4 PSMain(VSOut i) : SV_Target {\n"
 "    float2 suv = i.uv;\n"
 "    if (gEnable != 0) {\n"
-"      if (gMode == 4) {\n"
+"      if (gMode == 4 || gMode == 5) {\n"
 "        // PERSPECTIVE rotational reprojection (depth-independent -> cannot fold). Reconstruct this\n"
 "        // pixel's view ray from the FOV, rotate it by the fresh mouse delta to find where that ray\n"
 "        // pointed in the frozen frame, and project back to UV. Reduces to a uniform shift at the\n"
@@ -100,6 +103,17 @@ const char* kReprojectShader =
 "        float3 f  = float3(cy * dp.x + sy * dp.z, dp.y, -sy * dp.x + cy * dp.z); // Ry(yaw)\n"
 "        if (f.z <= 1e-4f) return float4(0,0,0,1);   // rotated behind camera -> border\n"
 "        suv = float2((f.x / f.z / tw + 1.0f) * 0.5f, (1.0f - f.y / f.z / th) * 0.5f);\n"
+"        // MODE 5: depth-correct camera-translation parallax (Phase 3). Reconstruct this pixel's view-\n"
+"        // space point from its depth, rotate it (reuse f = R*ray), add the fitted camera translation,\n"
+"        // and re-project. Near pixels (small Z) shift a lot, far pixels barely move -> real parallax.\n"
+"        // The rotational suv above is the Z->inf limit; this refines it using depth. Strength 0 = mode 4.\n"
+"        if (gMode == 5 && gParallax != 0.0f) {\n"
+"            float dC = gDepth.SampleLevel(gPt, i.uv, 0).r;\n"
+"            float Zc = (gNearZ * gFarZ) / (gNearZ + dC * (gFarZ - gNearZ));\n"
+"            float3 Pf = f * Zc + float3(gCamTx, gCamTy, gCamTz) * gParallax;\n"
+"            if (Pf.z > 1e-4f)\n"
+"                suv = float2((Pf.x / Pf.z / tw + 1.0f) * 0.5f, (1.0f - Pf.y / Pf.z / th) * 0.5f);\n"
+"        }\n"
 "        // Head-locked layer: the first-person weapon + everything bolted to it (sights, red-dot) is\n"
 "        // camera-locked at the near plane (reversed-Z -> high depth). Keep it un-warped so the gun\n"
 "        // and its optics stay put as a unit while the world (far depth, incl. NPC/world markers)\n"
@@ -482,7 +496,7 @@ bool BuildReprojectPipeline() {
     params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
     params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     params[1].Constants.ShaderRegister = 0;
-    params[1].Constants.Num32BitValues = 27;
+    params[1].Constants.Num32BitValues = 33;
     params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
     D3D12_STATIC_SAMPLER_DESC samps[2] = {};
@@ -787,6 +801,9 @@ void WarpRenderer::ReprojectInto(ID3D12CommandQueue* queue,
         UINT  debugView;
         float edgeFade;
         float maskDilate;
+        float camTx, camTy, camTz;
+        float parallax;
+        float nearZ, farZ;
     } consts = {
         warpU, warpV,
         s_params.mvScale * s_params.sign, s_params.mvScale * s_params.sign,
@@ -807,7 +824,10 @@ void WarpRenderer::ReprojectInto(ID3D12CommandQueue* queue,
         (UINT)(s_params.uiErode < 0 ? 0 : s_params.uiErode),
         s_params.debugMask ? 1u : 0u,
         s_params.edgeFade,
-        effMaskDilate
+        effMaskDilate,
+        s_params.camTx, s_params.camTy, s_params.camTz,
+        (s_params.mode == 5) ? s_params.parallaxStrength : 0.0f,
+        s_params.camNearZ, s_params.camFarZ
     };
 
     UINT slot = s_frameIdx % kFrames;
@@ -861,7 +881,7 @@ void WarpRenderer::ReprojectInto(ID3D12CommandQueue* queue,
     ID3D12DescriptorHeap* heaps[] = { s_rpSrvHeap };
     s_list->SetDescriptorHeaps(1, heaps);
     s_list->SetGraphicsRootDescriptorTable(0, gpu);
-    s_list->SetGraphicsRoot32BitConstants(1, 27, &consts, 0);
+    s_list->SetGraphicsRoot32BitConstants(1, 33, &consts, 0);
     s_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     s_list->DrawInstanced(3, 1, 0, 0);
 

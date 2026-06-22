@@ -324,6 +324,9 @@ void PresenterThread() {
         float capFov = haveCam ? cam.fovV : 0.0f;
         bool  fovSane = (capFov > 0.30f && capFov < 2.60f);   // ~17deg .. ~149deg
         wpRt.capturedFovDeg = fovSane ? capFov * 57.29578f : 0.0f;
+        if (haveCam && cam.farZ > cam.nearZ && cam.nearZ > 0.0f) {   // mode-5 parallax linearization
+            wpRt.camNearZ = cam.nearZ; wpRt.camFarZ = cam.farZ;
+        }
 
         // ADS detection: hold-right-mouse is the aim intent (FOV is constant on aim and depth-coverage
         // can't separate hip/ADS here — both proven). Swaps to the ADS lock profile below.

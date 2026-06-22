@@ -114,9 +114,14 @@ struct WarpParams {
     // ---- Phase 3 (MV-as-sensor) parallax: readouts of the fitted GLOBAL camera translation (the warp
     // consumption is mode 5, added next). camT* are view-space units per game-frame (x=right, y=up,
     // z=forward); parallaxOn gates the fit running each present. ----
-    bool  parallaxFit  = true;     // run the per-present MV->translation fit (cheap; just a readout for now)
+    bool  parallaxFit  = true;     // run the per-present MV->translation fit (feeds mode 5 + the readout)
     float camTx = 0.0f, camTy = 0.0f, camTz = 0.0f;  // fitted camera translation (per game-frame)
     float camTransConf = 0.0f;     // 0..1 fit confidence (inlier sample fraction)
+    float camNearZ = 0.0f, camFarZ = 0.0f;  // captured reversed-Z near/far planes (presenter sets; mode 5)
+    // mode 5 = mode-4 rotation + depth-correct camera-translation parallax from the fit. Strength folds
+    // the overall sign+scale (absolute units are uncalibrated); 0 = behaves exactly like mode 4. Flip the
+    // sign if parallax pushes the world the wrong way. Start small and ramp.
+    float parallaxStrength = 0.0f;
 
     // Filled by the renderer for the overlay HUD.
     float lastU = 0.0f, lastV = 0.0f;   // last rotational offset (UV)
